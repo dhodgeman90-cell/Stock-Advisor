@@ -209,3 +209,25 @@ def test_report_drops_misleading_sum_and_shows_compounded():
     assert "Sum of all" not in text                       # misleading headline removed
     assert "compounded" in text.lower()
     assert "Expectancy" in text
+
+
+def test_max_drawdown_flat_is_zero():
+    assert backtest.max_drawdown([100.0, 100.0, 100.0]) == 0.0
+
+
+def test_max_drawdown_monotonic_up_is_zero():
+    assert backtest.max_drawdown([100.0, 110.0, 130.0]) == 0.0
+
+
+def test_max_drawdown_simple_dip():
+    # peak 100 -> trough 70 = -30%
+    assert round(backtest.max_drawdown([100.0, 70.0, 90.0]), 1) == -30.0
+
+
+def test_max_drawdown_picks_worst_after_recovery():
+    # 100 -> 90 (-10%), recover to 120, drop to 84 (-30% off the new peak 120)
+    assert round(backtest.max_drawdown([100.0, 90.0, 120.0, 84.0]), 1) == -30.0
+
+
+def test_max_drawdown_empty_is_zero():
+    assert backtest.max_drawdown([]) == 0.0

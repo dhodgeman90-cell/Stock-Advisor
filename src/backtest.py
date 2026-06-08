@@ -3,6 +3,8 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+import pandas as pd
+
 from src import config, data, scoring, exits
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -145,6 +147,24 @@ def compounded_per_name(trades) -> float:
         return 0.0
     rets = [(f - 1) * 100 for f in factors.values()]
     return sum(rets) / len(rets)
+
+
+def max_drawdown(values) -> float:
+    """Worst peak-to-trough drop of an equity series, as a negative percent.
+
+    0.0 if the series never falls below a running peak (or is empty).
+    """
+    peak = None
+    worst = 0.0
+    for v in values:
+        v = float(v)
+        if peak is None or v > peak:
+            peak = v
+        if peak:
+            dd = (v - peak) / peak * 100
+            if dd < worst:
+                worst = dd
+    return worst
 
 
 def buy_and_hold(histories) -> float:
