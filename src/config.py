@@ -30,3 +30,11 @@ def load_weights(config_dir=CONFIG_DIR) -> dict:
     if not weights:
         raise ValueError("weights.yaml must contain a 'weights' mapping")
     return {k: float(v) for k, v in weights.items()}
+
+
+def load_adjudicator(config_dir=CONFIG_DIR) -> dict:
+    data = _load("adjudicator.yaml", config_dir)
+    caps = data.get("caps")
+    if not caps:
+        raise ValueError("adjudicator.yaml must contain a 'caps' mapping")
+    return {k: float(v) for k, v in caps.items()}
