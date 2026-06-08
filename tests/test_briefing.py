@@ -104,3 +104,48 @@ def test_signal_pill_colors_by_level():
 
 def test_signal_pill_unknown_level_defaults_to_green():
     assert briefing._signal_pill("whatever") == ("#dcfce7", "#166534")
+
+
+def test_render_briefing_html_has_header_table_and_pills():
+    ranked = [_adjudicated("MSFT", 78, 74, "cloud demand strong", "low", "no flags", ["+4 news"])]
+    holdings = [
+        _holding("NVDA", 128.40, 6.6, []),                              # clean -> green hold
+        _holding("AAPL", 182.10, -3.2,
+                 [{"type": "momentum_fade", "level": "watch", "emoji": "🟡",
+                   "detail": "rsi cooling"}]),
+    ]
+    html_out = briefing.render_briefing_html(
+        ranked, [], [], [], "2026-06-08", "risk_on", "Broad uptrend.", holdings=holdings)
+    assert "Stock Advisor" in html_out
+    assert "2026-06-08" in html_out
+    assert "<table" in html_out                       # holdings table
+    assert "#dcfce7" in html_out                       # green hold pill (NVDA, no signals)
+    assert "#fef9c3" in html_out                       # amber watch pill (AAPL)
+    assert "MSFT" in html_out                          # candidate card
+
+
+def test_render_briefing_html_escapes_untrusted_text():
+    ranked = [_adjudicated("X", 70, 70, "deal <b>&</b> close", "low", "fine", [])]
+    html_out = briefing.render_briefing_html(
+        ranked, [], [], [], "2026-06-08", "risk_on", "ok", holdings=[])
+    assert "deal <b>&</b>" not in html_out             # raw HTML must not pass through
+    assert "&lt;b&gt;" in html_out                      # it is escaped instead
+
+
+def test_render_briefing_html_handles_unavailable_price():
+    holdings = [_holding("NVDA", float("nan"), 0.0, [])]
+    html_out = briefing.render_briefing_html(
+        [], [], [], [], "2026-06-08", "risk_on", "ok", holdings=holdings)
+    assert "price unavailable" in html_out
+    assert "$nan" not in html_out.lower()      # NaN price not formatted as a number
+
+
+def test_render_briefing_html_omits_empty_sections_and_shows_vetoed():
+    vetoed = [{"ticker": "GME", "veto_reason": "headline spike"}]
+    html_out = briefing.render_briefing_html(
+        [], vetoed, [], [], "2026-06-08", "risk_on", "ok", holdings=[])
+    assert "Vetoed" in html_out
+    assert "headline spike" in html_out
+    assert "Other scored" not in html_out              # empty others omitted
+    assert "Excluded" not in html_out                  # empty excluded omitted
+    assert "No tracked positions" in html_out          # empty holdings note
