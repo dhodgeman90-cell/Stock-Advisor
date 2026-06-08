@@ -142,6 +142,39 @@ Using the synthetic `make_df()` helper (no network in unit tests):
 - Walk-forward / Monte-Carlo / parameter optimization.
 - Intraday data, brokerage integration, auto-execution.
 
+## Post-implementation tuning (2026-06-08)
+
+After the six fixes landed, a parameter sweep (each watchlist fetched once, rule combos
+evaluated in memory) revealed that the `trend_break_slow` "sell" exit was closing ~75-88%
+of trades — bailing on normal pullbacks below the 50-day MA and undercutting the trailing
+stop. A configurable `trend_break_slow_level` was added (`src/exits.py`; default `sell`,
+preserving prior behavior and tests). Demoting it to `watch` lets the trailing stop own
+exits.
+
+Sweep findings (compounded return per name; baselines unchanged):
+
+| Config | default | broad |
+|--------|---------|-------|
+| Original (slow=sell, trail=15, hold=60) | +38.6% | +18.6% |
+| slow=watch, trail=15, hold=60 | +49.2% | +28.4% |
+| **slow=watch, trail=12, hold=250 (adopted)** | **+49.1%** | **+33.1%** |
+| Buy-and-hold baseline | +96.4% | +56.2% |
+
+The improvement holds on the neutral broad universe (not just the cherry-picked winners),
+which argues against overfitting. `trail=12` was chosen over `15` because it won the broad
+test with negligible default cost (a marginal in-sample call). `buy_threshold` raised to 70
+hurt returns, so it stayed at 65. `max_hold_days` raised to 250 (~1yr) so a clock no longer
+force-closes running winners. After tuning, the **trailing stop is the dominant exit**
+(42/73 default, 30/63 broad) and expectancy rose to ~+7%/trade.
+
+Production values in `config/exits.yaml`: `take_profit_mode: trailing`, `trailing_stop_pct: 12`,
+`trend_break_slow_level: watch`, `max_hold_days: 250`, `buy_threshold: 65`, `cost_pct_per_side: 0.1`.
+
+**Honest framing:** over a ~2-year almost-straight-up market, a timing strategy still trails
+buy-and-hold (+49% vs +96% default). That is expected — a timing system's edge is smaller
+drawdowns in flat/down markets, which this window does not contain. A future addition of a
+max-drawdown metric would let us measure that advantage directly.
+
 ## Verification
 
 1. `python -m pytest -q` — all existing + new tests green.

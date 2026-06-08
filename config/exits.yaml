@@ -2,15 +2,16 @@ defaults:
   stop_loss_pct: 8            # sell if price <= entry * (1 - 0.08)
   take_profit_pct: 20         # used only when take_profit_mode is 'hard'
   take_profit_mode: trailing  # 'trailing' lets winners run; 'hard' caps at take_profit_pct
-  trailing_stop_pct: 15       # sell if price <= peak_since_entry * (1 - 0.15)
-  trend_break_fast: 20        # watch/trim if close < 20-day MA
-  trend_break_slow: 50        # sell if close < 50-day MA
+  trailing_stop_pct: 12       # sell if price <= peak_since_entry * (1 - 0.12)
+  trend_break_fast: 20        # MA period; emits a 'watch' (advisory) signal only
+  trend_break_slow: 50        # MA period for the slow trend-break signal
+  trend_break_slow_level: watch  # 'watch' = advisory (trailing stop owns exits); 'sell' = closes the trade
   momentum_fade:
     rsi_was_above: 70         # had been overbought...
     volume_dry_ratio: 0.7     # ...and volume now < 0.7x its 20-day average
 backtest:
   buy_threshold: 65           # simulate a buy when base score >= this
-  max_hold_days: 60           # force-close a trade after N trading days
+  max_hold_days: 250          # generous cap (~1yr) so the trailing stop, not a clock, exits winners
   window_years: 2             # how much history to replay
   cost_pct_per_side: 0.1      # 0.2% round-trip slippage/commission
   baseline: equal_weight_watchlist
