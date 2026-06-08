@@ -75,3 +75,51 @@ def test_clean_holding_returns_no_signals():
     position = {"ticker": "T", "entry_price": 108.0}   # ~0.9% up
     result = exits.evaluate_exit(df, position, RULES)
     assert result["signals"] == []
+
+
+TRAIL_RULES = {
+    "defaults": {
+        "stop_loss_pct": 8,
+        "take_profit_pct": 20,
+        "take_profit_mode": "trailing",
+        "trailing_stop_pct": 15,
+        "trend_break_fast": 20,
+        "trend_break_slow": 50,
+        "momentum_fade": {"rsi_was_above": 70, "volume_dry_ratio": 0.7},
+    },
+    "backtest": {},
+}
+
+
+def test_trailing_stop_fires_on_pullback_from_peak():
+    # Price well above entry and above MAs, but 15%+ below the peak we pass in.
+    df = make_df(list(range(50, 110)))                       # last close = 109
+    position = {"ticker": "T", "entry_price": 70.0, "peak_price": 130.0}
+    # 109 is ~16% below peak 130 -> trailing stop fires; not below MAs, not -8% from entry
+    result = exits.evaluate_exit(df, position, TRAIL_RULES)
+    assert "trailing_stop" in _types(result)
+    assert "take_profit" not in _types(result)               # hard target suppressed in trailing mode
+
+
+def test_trailing_stop_silent_while_near_peak():
+    df = make_df(list(range(50, 110)))                       # last close = 109
+    position = {"ticker": "T", "entry_price": 70.0, "peak_price": 110.0}
+    # 109 is <1% below peak 110 -> no trailing stop
+    result = exits.evaluate_exit(df, position, TRAIL_RULES)
+    assert "trailing_stop" not in _types(result)
+
+
+def test_trailing_mode_still_honors_hard_stop_loss():
+    # Steady uptrend, bought too high -> -8% stop must still fire even in trailing mode.
+    df = make_df(list(range(50, 110)))                       # last close = 109
+    position = {"ticker": "T", "entry_price": 119.0, "peak_price": 119.0}
+    result = exits.evaluate_exit(df, position, TRAIL_RULES)
+    assert "stop_loss" in _types(result)
+
+
+def test_trailing_stop_falls_back_to_entry_when_no_peak_given():
+    df = make_df(list(range(50, 110)))                       # last close = 109
+    position = {"ticker": "T", "entry_price": 100.0}         # no peak_price; 109 > entry
+    # peak falls back to max(entry, price)=109; 109 not 15% below 109 -> no trailing stop, no crash
+    result = exits.evaluate_exit(df, position, TRAIL_RULES)
+    assert "trailing_stop" not in _types(result)

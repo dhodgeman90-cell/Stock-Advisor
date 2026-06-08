@@ -26,7 +26,7 @@ def evaluate_exit(df, position, rules) -> dict:
     pct_from_entry = (price - entry) / entry * 100
 
     stop_pct = float(_resolve(position, defaults, "stop_loss_pct"))
-    target_pct = float(_resolve(position, defaults, "take_profit_pct"))
+    mode = str(defaults.get("take_profit_mode", "hard")).lower()
     # MA periods are global only — no per-position override
     fast = int(defaults["trend_break_fast"])
     slow = int(defaults["trend_break_slow"])
@@ -47,11 +47,22 @@ def evaluate_exit(df, position, rules) -> dict:
             "detail": f"down {pct_from_entry:.1f}% from entry (stop -{stop_pct:.0f}%)",
         })
 
-    if price >= entry * (1 + target_pct / 100):
-        signals.append({
-            "type": "take_profit", "level": "trim", "emoji": "🟢",
-            "detail": f"up {pct_from_entry:.1f}% from entry (target +{target_pct:.0f}%)",
-        })
+    if mode == "trailing":
+        peak = max(float(position.get("peak_price") or entry), price)
+        trail_pct = float(_resolve(position, defaults, "trailing_stop_pct"))
+        if peak > 0 and price <= peak * (1 - trail_pct / 100):
+            signals.append({
+                "type": "trailing_stop", "level": "sell", "emoji": "🔴",
+                "detail": (f"down {(price - peak) / peak * 100:.1f}% from peak "
+                           f"${peak:.2f} (trail -{trail_pct:.0f}%)"),
+            })
+    else:
+        target_pct = float(_resolve(position, defaults, "take_profit_pct"))
+        if price >= entry * (1 + target_pct / 100):
+            signals.append({
+                "type": "take_profit", "level": "trim", "emoji": "🟢",
+                "detail": f"up {pct_from_entry:.1f}% from entry (target +{target_pct:.0f}%)",
+            })
 
     if not pd.isna(sma_slow) and price < sma_slow:
         signals.append({
