@@ -1,12 +1,41 @@
 from email.message import EmailMessage
 
 
-def render_briefing(ranked, vetoed, others, excluded, date_str, regime, regime_note) -> str:
-    """Render the enriched daily briefing (Phase 2). `ranked` is pre-sorted by final_score."""
+def render_holdings_section(holdings) -> str:
+    """Markdown block for current holdings + their exit signals. Leads the briefing."""
+    lines = ["## 📊 Your holdings"]
+    if not holdings:
+        lines.append("_No tracked positions. Keep `positions.yaml` current as you buy and sell._")
+        return "\n".join(lines)
+    for h in holdings:
+        lines.append(
+            f"- **{h['ticker']}**: ${h['current_price']:.2f} "
+            f"({h['pct_from_entry']:+.1f}% from entry)"
+        )
+        if h["signals"]:
+            for s in h["signals"]:
+                lines.append(f"    - {s['emoji']} {s['type'].replace('_', ' ')}: {s['detail']}")
+        else:
+            lines.append("    - 🟢 holding — no exit signal")
+        if h.get("risk_flag"):
+            lines.append(f"    - ⚠️ {h['risk_flag']}")
+    lines.append("")
+    lines.append("_Reminder: keep `positions.yaml` current as you buy and sell._")
+    return "\n".join(lines)
+
+
+def render_briefing(ranked, vetoed, others, excluded, date_str, regime, regime_note,
+                    holdings=None) -> str:
+    """Render the enriched daily briefing (Phase 2 + Phase 3 holdings).
+
+    `ranked` is pre-sorted by final_score. `holdings` (Phase 3) leads the briefing.
+    """
     L = [
         f"# Stock Advisor — {date_str}",
         "",
         f"**Market regime:** {regime} — {regime_note}",
+        "",
+        render_holdings_section(holdings),
         "",
         "## Top candidates",
     ]
