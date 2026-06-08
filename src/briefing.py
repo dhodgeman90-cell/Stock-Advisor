@@ -1,5 +1,20 @@
+import html
 import math
 from email.message import EmailMessage
+
+
+# Pill (background, foreground) colors for a holding signal level.
+_PILL_COLORS = {
+    "sell":  ("#fee2e2", "#991b1b"),   # red
+    "trim":  ("#fef9c3", "#854d0e"),   # amber
+    "watch": ("#fef9c3", "#854d0e"),   # amber
+    "hold":  ("#dcfce7", "#166534"),   # green
+}
+
+
+def _signal_pill(level):
+    """(background, foreground) hex colors for a holding signal level."""
+    return _PILL_COLORS.get(level, _PILL_COLORS["hold"])
 
 
 def render_holdings_section(holdings) -> str:

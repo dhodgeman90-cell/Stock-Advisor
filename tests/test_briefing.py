@@ -93,3 +93,14 @@ def test_render_briefing_puts_holdings_above_candidates():
     text = briefing.render_briefing(ranked, [], [], [], "2026-06-08",
                                     "risk_on", "Upbeat.", holdings=holdings)
     assert text.index("NVDA") < text.index("Top candidates")
+
+
+def test_signal_pill_colors_by_level():
+    assert briefing._signal_pill("sell")  == ("#fee2e2", "#991b1b")   # red
+    assert briefing._signal_pill("trim")  == ("#fef9c3", "#854d0e")   # amber
+    assert briefing._signal_pill("watch") == ("#fef9c3", "#854d0e")   # amber
+    assert briefing._signal_pill("hold")  == ("#dcfce7", "#166534")   # green
+
+
+def test_signal_pill_unknown_level_defaults_to_green():
+    assert briefing._signal_pill("whatever") == ("#dcfce7", "#166534")
