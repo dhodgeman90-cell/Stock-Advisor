@@ -38,3 +38,38 @@ def load_adjudicator(config_dir=CONFIG_DIR) -> dict:
     if not caps:
         raise ValueError("adjudicator.yaml must contain a 'caps' mapping")
     return {k: float(v) for k, v in caps.items()}
+
+
+def load_exit_rules(config_dir=CONFIG_DIR) -> dict:
+    data = _load("exits.yaml", config_dir)
+    defaults = data.get("defaults")
+    backtest = data.get("backtest")
+    if not defaults or not backtest:
+        raise ValueError("exits.yaml must contain 'defaults' and 'backtest' mappings")
+    return {"defaults": defaults, "backtest": backtest}
+
+
+def load_positions(config_dir=CONFIG_DIR) -> list:
+    path = Path(config_dir) / "positions.yaml"
+    if not path.exists():
+        return []
+    with open(path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    if not data:
+        return []
+    raw = data.get("positions") or []
+    if not isinstance(raw, list):
+        raise ValueError("positions.yaml 'positions' must be a list")
+    out = []
+    for p in raw:
+        if "ticker" not in p or "entry_price" not in p:
+            raise ValueError("each position requires 'ticker' and 'entry_price'")
+        out.append({
+            "ticker": str(p["ticker"]).upper(),
+            "entry_price": float(p["entry_price"]),
+            "entry_date": str(p.get("entry_date", "")),
+            "shares": p.get("shares"),
+            "stop_loss_pct": p.get("stop_loss_pct"),
+            "take_profit_pct": p.get("take_profit_pct"),
+        })
+    return out

@@ -1,0 +1,10 @@
+# Your current holdings. Update this file whenever you buy or sell.
+# Each entry needs at least `ticker` and `entry_price`.
+# Optional per-position overrides: stop_loss_pct, take_profit_pct.
+positions: []
+#  - ticker: NVDA
+#    entry_price: 120.50
+#    entry_date: 2026-06-01
+#    shares: 2
+#    stop_loss_pct: 10
+#    take_profit_pct: 25

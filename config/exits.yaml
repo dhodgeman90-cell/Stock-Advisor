@@ -1,0 +1,13 @@
+defaults:
+  stop_loss_pct: 8         # sell if price <= entry * (1 - 0.08)
+  take_profit_pct: 20      # trim/sell if price >= entry * (1 + 0.20)
+  trend_break_fast: 20     # watch/trim if close < 20-day MA
+  trend_break_slow: 50     # sell if close < 50-day MA
+  momentum_fade:
+    rsi_was_above: 70      # had been overbought...
+    volume_dry_ratio: 0.7  # ...and volume now < 0.7x its 20-day average
+backtest:
+  buy_threshold: 65        # simulate a buy when base score >= this
+  max_hold_days: 60        # force-close a trade after N trading days
+  window_years: 2          # how much history to replay
+  baseline: equal_weight_watchlist
