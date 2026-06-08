@@ -69,6 +69,7 @@ def run() -> str:
     holdings = []
     for pos in positions:
         df = df_by_ticker.get(pos["ticker"])
+        ok = df is not None
         if df is None:
             # held ticker not on the watchlist — fetch it (with cache fallback)
             df = data.fetch_history(pos["ticker"], lookback)
@@ -77,8 +78,8 @@ def run() -> str:
                 data.save_cache(df, pos["ticker"], data_dir)
             else:
                 df = data.load_cache(pos["ticker"], data_dir)
-        valid = df is not None and data.validate(df, pos["ticker"])[0]
-        if not valid:
+                ok = df is not None and data.validate(df, pos["ticker"])[0]
+        if not ok:
             holdings.append({
                 "ticker": pos["ticker"], "current_price": float("nan"),
                 "pct_from_entry": 0.0, "signals": [],
