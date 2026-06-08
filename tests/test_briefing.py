@@ -71,6 +71,13 @@ def test_render_holdings_section_shows_signals_and_clean_lines():
     assert "no exit signal" in text            # clean holding line for AAPL
 
 
+def test_render_holdings_section_shows_risk_flag():
+    holdings = [_holding("NVDA", 109.0, -3.0, [], risk_flag="earnings tomorrow")]
+    text = briefing.render_holdings_section(holdings)
+    assert "⚠️" in text
+    assert "earnings tomorrow" in text
+
+
 def test_render_briefing_puts_holdings_above_candidates():
     ranked = [_adjudicated("HI", 88, 80, "new deal", "low", "no flags", ["+15 catalyst"])]
     holdings = [_holding("NVDA", 109.0, -9.2,
