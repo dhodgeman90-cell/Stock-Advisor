@@ -32,7 +32,7 @@ def test_take_profit_fires_when_up_target():
     df = make_df(list(range(50, 110)))           # last close = 109
     position = {"ticker": "T", "entry_price": 90.0}    # 109 is ~21% above 90
     result = exits.evaluate_exit(df, position, RULES)
-    assert "take_profit" in _types(result)
+    assert _types(result) == ["take_profit"]
 
 
 def test_trend_break_lists_slow_before_fast():
