@@ -155,6 +155,10 @@ def run() -> str:
     # Optional email
     if all(os.environ.get(k) for k in ("EMAIL_USER", "EMAIL_PASSWORD", "EMAIL_TO")):
         try:
+            html_body = briefing.render_briefing_html(
+                ranked, vetoed, others, excluded, date_str,
+                context["regime"], context["note"], holdings=holdings,
+            )
             briefing.send_email(
                 f"Stock Advisor — {date_str}", text,
                 host=os.environ.get("EMAIL_HOST", "smtp.gmail.com"),
@@ -162,6 +166,7 @@ def run() -> str:
                 user=os.environ["EMAIL_USER"],
                 password=os.environ["EMAIL_PASSWORD"],
                 to_addr=os.environ["EMAIL_TO"],
+                html_body=html_body,
             )
             print("[briefing emailed]")
         except Exception as e:
