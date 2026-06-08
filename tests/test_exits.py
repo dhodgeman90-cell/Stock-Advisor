@@ -123,3 +123,22 @@ def test_trailing_stop_falls_back_to_entry_when_no_peak_given():
     # peak falls back to max(entry, price)=109; 109 not 15% below 109 -> no trailing stop, no crash
     result = exits.evaluate_exit(df, position, TRAIL_RULES)
     assert "trailing_stop" not in _types(result)
+
+
+def test_trend_break_slow_level_defaults_to_sell():
+    prices = list(range(50, 101)) + [95, 90, 85, 80, 78, 76, 74, 72, 70, 68]
+    df = make_df(prices)                                      # last close = 68, below MAs
+    position = {"ticker": "T", "entry_price": 70.0}          # ~2.9% below entry: no stop
+    result = exits.evaluate_exit(df, position, RULES)        # RULES has no level key
+    sig = next(s for s in result["signals"] if s["type"] == "trend_break_slow")
+    assert sig["level"] == "sell"
+
+
+def test_trend_break_slow_level_configurable_to_watch():
+    prices = list(range(50, 101)) + [95, 90, 85, 80, 78, 76, 74, 72, 70, 68]
+    df = make_df(prices)
+    position = {"ticker": "T", "entry_price": 70.0}
+    rules = {**RULES, "defaults": {**RULES["defaults"], "trend_break_slow_level": "watch"}}
+    result = exits.evaluate_exit(df, position, rules)
+    sig = next(s for s in result["signals"] if s["type"] == "trend_break_slow")
+    assert sig["level"] == "watch"                            # demoted -> won't close a backtest trade

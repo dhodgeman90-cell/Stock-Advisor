@@ -64,9 +64,11 @@ def evaluate_exit(df, position, rules) -> dict:
                 "detail": f"up {pct_from_entry:.1f}% from entry (target +{target_pct:.0f}%)",
             })
 
+    slow_level = str(defaults.get("trend_break_slow_level", "sell")).lower()
     if not pd.isna(sma_slow) and price < sma_slow:
         signals.append({
-            "type": "trend_break_slow", "level": "sell", "emoji": "🔴",
+            "type": "trend_break_slow", "level": slow_level,
+            "emoji": "🔴" if slow_level == "sell" else "🟡",
             "detail": f"close ${price:.2f} below {slow}-day MA ${sma_slow:.2f}",
         })
 
