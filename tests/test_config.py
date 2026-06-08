@@ -136,3 +136,18 @@ def test_load_positions_rejects_zero_entry_price(tmp_path):
     )
     with pytest.raises(ValueError):
         config.load_positions(cfg)
+
+
+def test_load_watchlist_named_loads_suffixed_file(tmp_path):
+    (tmp_path / "watchlist_broad.yaml").write_text(
+        "tickers:\n  - JNJ\n  - XOM\nsettings:\n  shortlist_size: 5\n", encoding="utf-8")
+    wl = config.load_watchlist(config_dir=tmp_path, name="broad")
+    assert wl["tickers"] == ["JNJ", "XOM"]
+
+
+def test_load_positions_reads_trailing_stop_override(tmp_path):
+    (tmp_path / "positions.yaml").write_text(
+        "positions:\n  - ticker: AAA\n    entry_price: 100\n    trailing_stop_pct: 12\n",
+        encoding="utf-8")
+    pos = config.load_positions(config_dir=tmp_path)
+    assert pos[0]["trailing_stop_pct"] == 12

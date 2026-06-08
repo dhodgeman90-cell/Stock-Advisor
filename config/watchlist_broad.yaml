@@ -1,0 +1,20 @@
+# Neutral, sector-spread universe for unbiased backtest validation.
+# Deliberately includes laggards (INTC, F, VZ, DIS) so it is not cherry-picked.
+tickers:
+  - JNJ    # healthcare
+  - UNH    # health insurance
+  - JPM    # banking
+  - XOM    # energy
+  - PG     # consumer staples
+  - KO     # consumer staples
+  - CAT    # industrial
+  - NEE    # utility
+  - VZ     # telecom
+  - DIS    # media
+  - INTC   # semiconductors (laggard)
+  - F      # autos (laggard)
+settings:
+  shortlist_size: 8
+  lookback_days: 200
+  min_price: 5.0
+  min_avg_volume: 500000

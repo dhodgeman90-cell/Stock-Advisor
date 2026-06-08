@@ -13,8 +13,9 @@ def _load(name: str, config_dir) -> dict:
     return data
 
 
-def load_watchlist(config_dir=CONFIG_DIR) -> dict:
-    data = _load("watchlist.yaml", config_dir)
+def load_watchlist(config_dir=CONFIG_DIR, name=None) -> dict:
+    fname = "watchlist.yaml" if name is None else f"watchlist_{name}.yaml"
+    data = _load(fname, config_dir)
     tickers = data.get("tickers")
     if not tickers or not isinstance(tickers, list):
         raise ValueError("watchlist.yaml must contain a non-empty 'tickers' list")
@@ -78,5 +79,6 @@ def load_positions(config_dir=CONFIG_DIR) -> list:
             "shares": p.get("shares"),
             "stop_loss_pct": p.get("stop_loss_pct"),
             "take_profit_pct": p.get("take_profit_pct"),
+            "trailing_stop_pct": p.get("trailing_stop_pct"),
         })
     return out
