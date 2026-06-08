@@ -2,6 +2,8 @@ import datetime as dt
 import os
 from pathlib import Path
 
+import pandas as pd
+
 from src import config, data, scoring, news, agents, adjudicator, briefing, report, exits
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -86,7 +88,16 @@ def run() -> str:
                 "risk_flag": "no valid price data",
             })
             continue
-        holdings.append(exits.evaluate_exit(df, pos, exit_rules))
+        entry_date = pos.get("entry_date") or ""
+        try:
+            if entry_date:
+                since = df.loc[df.index >= pd.Timestamp(entry_date)]
+                peak = float(since["Close"].max()) if len(since) else float(pos["entry_price"])
+            else:
+                peak = float(pos["entry_price"])
+        except Exception:
+            peak = float(pos["entry_price"])
+        holdings.append(exits.evaluate_exit(df, {**pos, "peak_price": peak}, exit_rules))
 
     # Graceful fallback: no API key -> deterministic-only report (Phase 1 behavior)
     if not os.environ.get("ANTHROPIC_API_KEY"):
