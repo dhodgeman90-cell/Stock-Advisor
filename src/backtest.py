@@ -48,7 +48,8 @@ def simulate_ticker(df, ticker, weights, settings, rules) -> list:
             force = held_days >= max_hold
             if signalled or force:
                 exit_price = float(df["Close"].iloc[i])
-                reason = ev["signals"][0]["type"] if signalled else "max_hold"
+                reason = (next(s["type"] for s in ev["signals"] if s["level"] in _EXIT_LEVELS)
+                          if signalled else "max_hold")
                 ret = (exit_price - open_trade["entry_price"]) / open_trade["entry_price"] * 100
                 trades.append({
                     "ticker": ticker,
@@ -83,7 +84,8 @@ def simulate_ticker(df, ticker, weights, settings, rules) -> list:
 def summarize(trades) -> dict:
     if not trades:
         return {"count": 0, "win_rate": 0.0, "avg_gain": 0.0, "avg_loss": 0.0,
-                "avg_hold": 0.0, "total_return": 0.0, "by_reason": Counter()}
+                "avg_hold": 0.0, "total_return": 0.0, "avg_trade_return": 0.0,
+                "by_reason": Counter()}
     rets = [t["return_pct"] for t in trades]
     wins = [r for r in rets if r > 0]
     losses = [r for r in rets if r <= 0]   # break-even (0%) counts as a loss (conservative)
@@ -94,6 +96,7 @@ def summarize(trades) -> dict:
         "avg_loss": (sum(losses) / len(losses)) if losses else 0.0,
         "avg_hold": sum(t["hold_days"] for t in trades) / len(trades),
         "total_return": sum(rets),
+        "avg_trade_return": sum(rets) / len(trades),
         "by_reason": Counter(t["reason"] for t in trades),
     }
 
@@ -117,8 +120,14 @@ def render_backtest_report(summary, baseline, trades, date_str) -> str:
         f"- Win rate: **{summary['win_rate']:.0f}%**",
         f"- Avg gain: **{summary['avg_gain']:+.1f}%**  |  Avg loss: **{summary['avg_loss']:+.1f}%**",
         f"- Avg hold: **{summary['avg_hold']:.0f}** trading days",
-        f"- Strategy total return (sum of trade returns): **{summary['total_return']:+.1f}%**",
-        f"- Buy-and-hold baseline (equal-weight watchlist): **{baseline:+.1f}%**",
+        "",
+        "### Strategy vs buy-and-hold (comparable, per-position average)",
+        f"- Avg return per trade: **{summary['avg_trade_return']:+.1f}%**",
+        f"- Buy-and-hold baseline (avg per watchlist name): **{baseline:+.1f}%**",
+        "",
+        (f"_Sum of all {summary['count']} trade returns: {summary['total_return']:+.1f}%. "
+         f"This is a tally of independent trades, not a compounded account balance — "
+         f"don't compare it directly to buy-and-hold._"),
         "",
         "## Exit reasons",
     ]

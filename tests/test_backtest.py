@@ -53,6 +53,7 @@ def test_summarize_computes_win_rate_and_averages():
     assert round(s["avg_gain"], 1) == 16.0
     assert round(s["avg_loss"], 1) == -8.0
     assert s["by_reason"]["take_profit"] == 2
+    assert round(s["avg_trade_return"], 1) == 8.0
 
 
 def test_summarize_handles_no_trades():
@@ -98,4 +99,5 @@ def test_render_backtest_report_lists_trades_and_baseline():
     assert "AAA" in text
     assert "take profit" in text
     assert "Buy-and-hold baseline" in text
+    assert "Avg return per trade" in text
     assert "not financial advice" in text.lower()

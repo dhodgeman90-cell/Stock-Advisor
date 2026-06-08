@@ -1,3 +1,4 @@
+import math
 from email.message import EmailMessage
 
 
@@ -8,10 +9,14 @@ def render_holdings_section(holdings) -> str:
         lines.append("_No tracked positions. Keep `positions.yaml` current as you buy and sell._")
         return "\n".join(lines)
     for h in holdings:
-        lines.append(
-            f"- **{h['ticker']}**: ${h['current_price']:.2f} "
-            f"({h['pct_from_entry']:+.1f}% from entry)"
-        )
+        price = h["current_price"]
+        if isinstance(price, float) and math.isnan(price):
+            lines.append(f"- **{h['ticker']}**: price unavailable")
+        else:
+            lines.append(
+                f"- **{h['ticker']}**: ${price:.2f} "
+                f"({h['pct_from_entry']:+.1f}% from entry)"
+            )
         if h["signals"]:
             for s in h["signals"]:
                 lines.append(f"    - {s['emoji']} {s['type'].replace('_', ' ')}: {s['detail']}")
