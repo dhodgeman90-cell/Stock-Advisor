@@ -263,3 +263,14 @@ def test_buy_and_hold_equity_curve_equal_weight():
     b = make_df([100.0, 100.0, 80.0])            # normalized [1.0, 1.0, 0.8]
     curve = backtest.buy_and_hold_equity_curve({"A": a, "B": b})
     assert [round(v, 3) for v in curve] == [1.0, 1.05, 1.0]
+
+
+def test_report_includes_max_drawdown_lines():
+    trades = [{"ticker": "AAA", "entry_date": "2024-01-01", "exit_date": "2024-01-05",
+               "entry_price": 100.0, "exit_price": 108.0, "return_pct": 8.0,
+               "hold_days": 4, "reason": "take_profit"}]
+    summary = backtest.summarize(trades)
+    text = backtest.render_backtest_report(summary, 5.0, trades, "2026-06-08",
+                                           strategy_dd=-9.0, buyhold_dd=-28.0)
+    assert "Strategy max drawdown: **-9.0%**" in text
+    assert "Buy-and-hold max drawdown: **-28.0%**" in text

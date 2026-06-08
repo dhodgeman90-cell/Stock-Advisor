@@ -240,7 +240,8 @@ def buy_and_hold_equity_curve(histories) -> list:
     return _portfolio_curve(slices)
 
 
-def render_backtest_report(summary, baseline, trades, date_str, label="default", sources=None) -> str:
+def render_backtest_report(summary, baseline, trades, date_str, label="default",
+                           sources=None, strategy_dd=0.0, buyhold_dd=0.0) -> str:
     compounded = compounded_per_name(trades)
     L = [
         f"# Stock Advisor — Backtest ({label}, {date_str})",
@@ -255,6 +256,8 @@ def render_backtest_report(summary, baseline, trades, date_str, label="default",
         f"- Strategy return per name (compounded): **{compounded:+.1f}%**",
         f"- Buy-and-hold baseline (avg per watchlist name): **{baseline:+.1f}%**",
         f"- Avg return per trade: **{summary['avg_trade_return']:+.1f}%**",
+        f"- Strategy max drawdown: **{strategy_dd:+.1f}%**",
+        f"- Buy-and-hold max drawdown: **{buyhold_dd:+.1f}%**",
         "",
         "## Exit reasons",
     ]
