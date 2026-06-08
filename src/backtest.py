@@ -1,11 +1,13 @@
 import datetime as dt
+import sys
 from collections import Counter
 from pathlib import Path
 
 from src import config, data, scoring, exits
 
 ROOT = Path(__file__).resolve().parent.parent
-MIN_HISTORY = 60   # need >=50 rows for the 50-day MA before the first decision
+MIN_HISTORY = 60   # 50 rows for the SMA-50 warm-up + ~10 days before the first decision
+_EXIT_LEVELS = {"sell", "trim"}   # signal levels that close a backtest trade
 
 
 def simulate_ticker(df, ticker, weights, settings, rules) -> list:
@@ -40,15 +42,13 @@ def simulate_ticker(df, ticker, weights, settings, rules) -> list:
             position = {"ticker": ticker, "entry_price": open_trade["entry_price"]}
             ev = exits.evaluate_exit(window, position, rules)
             held_days = i - open_trade["entry_idx"]
-            sell = any(s["level"] == "sell" for s in ev["signals"])
-            take = any(s["type"] == "take_profit" for s in ev["signals"])
+            # Signals at _EXIT_LEVELS close the trade; 'watch'-level signals don't.
+            # exits.py emits signals in priority order, so signals[0] is the trigger.
+            signalled = any(s["level"] in _EXIT_LEVELS for s in ev["signals"])
             force = held_days >= max_hold
-            if sell or take or force:
+            if signalled or force:
                 exit_price = float(df["Close"].iloc[i])
-                if ev["signals"] and (sell or take):
-                    reason = ev["signals"][0]["type"]
-                else:
-                    reason = "max_hold"
+                reason = ev["signals"][0]["type"] if signalled else "max_hold"
                 ret = (exit_price - open_trade["entry_price"]) / open_trade["entry_price"] * 100
                 trades.append({
                     "ticker": ticker,
@@ -62,6 +62,21 @@ def simulate_ticker(df, ticker, weights, settings, rules) -> list:
                 })
                 open_trade = None
         i += 1
+    # Force-close any trade still open when the data window ends.
+    if open_trade is not None:
+        exit_price = float(df["Close"].iloc[-1])
+        held_days = (n - 1) - open_trade["entry_idx"]
+        ret = (exit_price - open_trade["entry_price"]) / open_trade["entry_price"] * 100
+        trades.append({
+            "ticker": ticker,
+            "entry_date": str(open_trade["entry_date"].date()),
+            "entry_price": open_trade["entry_price"],
+            "exit_date": str(df.index[-1].date()),
+            "exit_price": exit_price,
+            "return_pct": ret,
+            "hold_days": held_days,
+            "reason": "end_of_data",
+        })
     return trades
 
 
@@ -71,7 +86,7 @@ def summarize(trades) -> dict:
                 "avg_hold": 0.0, "total_return": 0.0, "by_reason": Counter()}
     rets = [t["return_pct"] for t in trades]
     wins = [r for r in rets if r > 0]
-    losses = [r for r in rets if r <= 0]
+    losses = [r for r in rets if r <= 0]   # break-even (0%) counts as a loss (conservative)
     return {
         "count": len(trades),
         "win_rate": len(wins) / len(trades) * 100,
@@ -113,6 +128,17 @@ def render_backtest_report(summary, baseline, trades, date_str) -> str:
     else:
         L.append("_No trades._")
     L.append("")
+    L.append("## Trades")
+    if trades:
+        for t in trades:
+            L.append(
+                f"- {t['ticker']} {t['entry_date']} → {t['exit_date']} "
+                f"({t['hold_days']}d): {t['return_pct']:+.1f}% "
+                f"[{t['reason'].replace('_', ' ')}]"
+            )
+    else:
+        L.append("_No trades._")
+    L.append("")
     L.append("> Caveat: a good backtest is encouraging, not a guarantee. Overfitting is a "
              "real risk — treat these numbers skeptically and confirm with paper trading.")
     L.append("")
@@ -147,7 +173,6 @@ def run() -> str:
     reports_dir.mkdir(parents=True, exist_ok=True)
     (reports_dir / f"backtest-{date_str}.md").write_text(text, encoding="utf-8")
 
-    import sys
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:

@@ -66,3 +66,36 @@ def test_buy_and_hold_equal_weight_average():
         "B": make_df([100.0, 130.0]),    # +30%
     }
     assert round(backtest.buy_and_hold(histories), 1) == 20.0
+
+
+def test_simulate_ticker_force_closes_at_max_hold():
+    prices = [100.0] * 70           # flat: no stop/target/trend/fade ever fires
+    df = make_df(prices)
+    rules = {**RULES_ENTER_ALWAYS,
+             "backtest": {"buy_threshold": 0, "max_hold_days": 3}}
+    trades = backtest.simulate_ticker(df, "T", WEIGHTS, SETTINGS, rules)
+    assert len(trades) >= 1
+    assert trades[0]["reason"] == "max_hold"
+    assert trades[0]["hold_days"] == 3
+
+
+def test_simulate_ticker_force_closes_open_trade_at_end_of_data():
+    prices = [100.0] * 63           # entry at day 61; data ends before any exit
+    df = make_df(prices)
+    rules = {**RULES_ENTER_ALWAYS,
+             "backtest": {"buy_threshold": 0, "max_hold_days": 60}}
+    trades = backtest.simulate_ticker(df, "T", WEIGHTS, SETTINGS, rules)
+    assert len(trades) == 1
+    assert trades[0]["reason"] == "end_of_data"
+
+
+def test_render_backtest_report_lists_trades_and_baseline():
+    trades = [{"ticker": "AAA", "entry_date": "2024-01-01", "exit_date": "2024-01-05",
+               "entry_price": 100.0, "exit_price": 108.0, "return_pct": 8.0,
+               "hold_days": 4, "reason": "take_profit"}]
+    summary = backtest.summarize(trades)
+    text = backtest.render_backtest_report(summary, 5.0, trades, "2026-06-08")
+    assert "AAA" in text
+    assert "take profit" in text
+    assert "Buy-and-hold baseline" in text
+    assert "not financial advice" in text.lower()
