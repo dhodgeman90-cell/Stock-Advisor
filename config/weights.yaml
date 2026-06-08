@@ -1,0 +1,6 @@
+weights:
+  breakout: 30
+  volume: 30
+  momentum: 20
+  trend: 15
+  pullback: 5
