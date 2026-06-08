@@ -210,7 +210,8 @@ def render_briefing_html(ranked, vetoed, others, excluded, date_str, regime,
     return "".join(P)
 
 
-def send_email(subject, body, *, host, port, user, password, to_addr, smtp_factory=None) -> None:
+def send_email(subject, body, *, host, port, user, password, to_addr,
+               html_body=None, smtp_factory=None) -> None:
     """Send the briefing via SMTP. `smtp_factory` is injectable for testing."""
     if smtp_factory is None:
         import smtplib
@@ -223,6 +224,8 @@ def send_email(subject, body, *, host, port, user, password, to_addr, smtp_facto
     msg["From"] = user
     msg["To"] = to_addr
     msg.set_content(body)
+    if html_body:
+        msg.add_alternative(html_body, subtype="html")
 
     with smtp_factory() as server:
         server.login(user, password)

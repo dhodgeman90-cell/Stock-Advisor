@@ -45,6 +45,31 @@ def test_send_email_logs_in_and_sends():
     assert fake.sent_message["To"] == "you@test.com"
 
 
+def test_send_email_sends_multipart_when_html_given():
+    fake = FakeSMTP()
+    briefing.send_email(
+        "Subj", "plain body", host="smtp.test", port=465,
+        user="me@test.com", password="pw", to_addr="you@test.com",
+        html_body="<p>hi</p>", smtp_factory=lambda: fake,
+    )
+    msg = fake.sent_message
+    assert msg.is_multipart()
+    types = [p.get_content_type() for p in msg.iter_parts()]
+    assert "text/plain" in types
+    assert "text/html" in types
+
+
+def test_send_email_plain_only_when_no_html():
+    fake = FakeSMTP()
+    briefing.send_email(
+        "Subj", "plain body", host="smtp.test", port=465,
+        user="me@test.com", password="pw", to_addr="you@test.com",
+        smtp_factory=lambda: fake,
+    )
+    assert not fake.sent_message.is_multipart()
+    assert fake.sent_message.get_content_type() == "text/plain"
+
+
 def _holding(ticker, price, pct, signals, risk_flag=None):
     h = {"ticker": ticker, "current_price": price, "pct_from_entry": pct, "signals": signals}
     if risk_flag:
