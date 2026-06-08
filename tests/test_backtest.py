@@ -90,6 +90,51 @@ def test_simulate_ticker_force_closes_open_trade_at_end_of_data():
     assert trades[0]["reason"] == "end_of_data"
 
 
+RULES_TRAILING = {
+    "defaults": {
+        "stop_loss_pct": 8,
+        "take_profit_pct": 20,
+        "take_profit_mode": "trailing",
+        "trailing_stop_pct": 15,
+        "trend_break_fast": 20,
+        "trend_break_slow": 50,
+        "momentum_fade": {"rsi_was_above": 70, "volume_dry_ratio": 0.7},
+    },
+    "backtest": {"buy_threshold": 0, "max_hold_days": 600},
+}
+
+
+def test_simulate_ticker_lets_winner_run_then_trailing_stops():
+    # 62 flat days (entry triggers), climb to 200, then fall 16% off the peak.
+    prices = [100.0] * 62 + list(range(100, 201, 5)) + [184.0, 168.0]
+    df = make_df([float(p) for p in prices])
+    trades = backtest.simulate_ticker(df, "T", WEIGHTS, SETTINGS, RULES_TRAILING)
+    assert len(trades) == 1
+    assert trades[0]["reason"] == "trailing_stop"
+    assert trades[0]["return_pct"] > 20.0          # rode well past the old +20% cap
+
+
+def test_transaction_cost_reduces_return():
+    prices = [100.0] * 62 + [92.0]                 # -8% stop, hard mode
+    df = make_df(prices)
+    df.loc[df.index[61], "Open"] = 100.0           # entry at 100 for clean math
+    rules = {**RULES_ENTER_ALWAYS,
+             "backtest": {"buy_threshold": 0, "max_hold_days": 60, "cost_pct_per_side": 0.5}}
+    trades = backtest.simulate_ticker(df, "T", WEIGHTS, SETTINGS, rules)
+    raw = (92.0 - 100.0) / 100.0 * 100             # -8.0
+    assert round(trades[0]["return_pct"], 2) == round(raw - 1.0, 2)   # minus 2*0.5% round-trip
+
+
+def test_zero_cost_matches_raw_return():
+    prices = [100.0] * 62 + [92.0]
+    df = make_df(prices)
+    df.loc[df.index[61], "Open"] = 100.0
+    rules = {**RULES_ENTER_ALWAYS,
+             "backtest": {"buy_threshold": 0, "max_hold_days": 60, "cost_pct_per_side": 0.0}}
+    trades = backtest.simulate_ticker(df, "T", WEIGHTS, SETTINGS, rules)
+    assert round(trades[0]["return_pct"], 2) == -8.0
+
+
 def test_render_backtest_report_lists_trades_and_baseline():
     trades = [{"ticker": "AAA", "entry_date": "2024-01-01", "exit_date": "2024-01-05",
                "entry_price": 100.0, "exit_price": 108.0, "return_pct": 8.0,

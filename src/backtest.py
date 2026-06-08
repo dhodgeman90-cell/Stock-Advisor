@@ -10,6 +10,13 @@ MIN_HISTORY = 60   # 50 rows for the SMA-50 warm-up + ~10 days before the first 
 _EXIT_LEVELS = {"sell", "trim"}   # signal levels that close a backtest trade
 
 
+def _net_return(entry_price, exit_price, rules) -> float:
+    """Trade return (%) after a round-trip transaction cost."""
+    raw = (exit_price - entry_price) / entry_price * 100
+    cost = 2 * float(rules["backtest"].get("cost_pct_per_side", 0.0))
+    return raw - cost
+
+
 def simulate_ticker(df, ticker, weights, settings, rules) -> list:
     """Trade-by-trade replay for one ticker. Returns a list of closed trades.
 
@@ -36,10 +43,13 @@ def simulate_ticker(df, ticker, weights, settings, rules) -> list:
                     "entry_idx": entry_idx,
                     "entry_price": float(df["Open"].iloc[entry_idx]),
                     "entry_date": df.index[entry_idx],
+                    "peak": float(df["Open"].iloc[entry_idx]),
                 }
                 i = entry_idx           # resume exit checks the day AFTER entry
         else:
-            position = {"ticker": ticker, "entry_price": open_trade["entry_price"]}
+            open_trade["peak"] = max(open_trade["peak"], float(df["Close"].iloc[i]))
+            position = {"ticker": ticker, "entry_price": open_trade["entry_price"],
+                        "peak_price": open_trade["peak"]}
             ev = exits.evaluate_exit(window, position, rules)
             held_days = i - open_trade["entry_idx"]
             # Signals at _EXIT_LEVELS close the trade; 'watch'-level signals don't.
@@ -50,7 +60,7 @@ def simulate_ticker(df, ticker, weights, settings, rules) -> list:
                 exit_price = float(df["Close"].iloc[i])
                 reason = (next(s["type"] for s in ev["signals"] if s["level"] in _EXIT_LEVELS)
                           if signalled else "max_hold")
-                ret = (exit_price - open_trade["entry_price"]) / open_trade["entry_price"] * 100
+                ret = _net_return(open_trade["entry_price"], exit_price, rules)
                 trades.append({
                     "ticker": ticker,
                     "entry_date": str(open_trade["entry_date"].date()),
@@ -67,7 +77,7 @@ def simulate_ticker(df, ticker, weights, settings, rules) -> list:
     if open_trade is not None:
         exit_price = float(df["Close"].iloc[-1])
         held_days = (n - 1) - open_trade["entry_idx"]
-        ret = (exit_price - open_trade["entry_price"]) / open_trade["entry_price"] * 100
+        ret = _net_return(open_trade["entry_price"], exit_price, rules)
         trades.append({
             "ticker": ticker,
             "entry_date": str(open_trade["entry_date"].date()),
