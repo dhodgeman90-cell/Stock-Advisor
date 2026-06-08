@@ -1,10 +1,28 @@
 # Your current holdings. Update this file whenever you buy or sell.
 # Each entry needs at least `ticker` and `entry_price`.
 # Optional per-position overrides: stop_loss_pct, take_profit_pct.
-positions: []
-#  - ticker: NVDA
-#    entry_price: 120.50
-#    entry_date: 2026-06-01
-#    shares: 2
-#    stop_loss_pct: 10
-#    take_profit_pct: 25
+#
+# entry_price values below were derived from Robinhood %-gain + $-gain + shares
+# (entry = gain / (pct * shares)); refine from "Your average cost" if you want exact.
+positions:
+  - ticker: TSLA
+    entry_price: 374.67
+    shares: 0.050197
+  - ticker: APP
+    entry_price: 543.28
+    shares: 0.018046
+  - ticker: QURE
+    entry_price: 22.49
+    shares: 1
+  - ticker: GEV
+    entry_price: 726.28
+    shares: 0.087000
+  - ticker: SOXL
+    entry_price: 49.21
+    shares: 0.180000
+  - ticker: AAPL
+    entry_price: 269.79
+    shares: 0.200000
+  - ticker: NXXT
+    entry_price: 0.4861
+    shares: 47
