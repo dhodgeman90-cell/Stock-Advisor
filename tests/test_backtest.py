@@ -231,3 +231,35 @@ def test_max_drawdown_picks_worst_after_recovery():
 
 def test_max_drawdown_empty_is_zero():
     assert backtest.max_drawdown([]) == 0.0
+
+
+def test_strategy_equity_curve_tracks_trade_then_flat_in_cash():
+    # Hold from 01-02 to 01-04 (+20%), then sit in cash flat at 1.20.
+    df = make_df([100.0, 100.0, 110.0, 120.0, 120.0, 120.0])
+    trades = [{"ticker": "T", "entry_date": "2024-01-02", "exit_date": "2024-01-04",
+               "entry_price": 100.0, "exit_price": 120.0, "return_pct": 20.0,
+               "hold_days": 2, "reason": "take_profit"}]
+    curve = backtest.strategy_equity_curve({"T": df}, trades)
+    assert [round(v, 3) for v in curve] == [1.0, 1.0, 1.1, 1.2, 1.2, 1.2]
+
+
+def test_strategy_equity_curve_averages_equal_weight_across_tickers():
+    a = make_df([100.0, 100.0, 120.0])           # A trades +20% over the window
+    b = make_df([100.0, 100.0, 100.0])           # B never trades -> flat at 1.0
+    trades = [{"ticker": "A", "entry_date": "2024-01-01", "exit_date": "2024-01-03",
+               "entry_price": 100.0, "exit_price": 120.0, "return_pct": 20.0,
+               "hold_days": 2, "reason": "take_profit"}]
+    curve = backtest.strategy_equity_curve({"A": a, "B": b}, trades)
+    # A slice [1.0, 1.0, 1.2]; B slice [1.0, 1.0, 1.0]; mean [1.0, 1.0, 1.1]
+    assert [round(v, 3) for v in curve] == [1.0, 1.0, 1.1]
+
+
+def test_strategy_equity_curve_empty_histories():
+    assert backtest.strategy_equity_curve({}, []) == []
+
+
+def test_buy_and_hold_equity_curve_equal_weight():
+    a = make_df([100.0, 110.0, 120.0])           # normalized [1.0, 1.1, 1.2]
+    b = make_df([100.0, 100.0, 80.0])            # normalized [1.0, 1.0, 0.8]
+    curve = backtest.buy_and_hold_equity_curve({"A": a, "B": b})
+    assert [round(v, 3) for v in curve] == [1.0, 1.05, 1.0]

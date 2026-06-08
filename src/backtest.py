@@ -178,6 +178,68 @@ def buy_and_hold(histories) -> float:
     return (sum(rets) / len(rets)) if rets else 0.0
 
 
+def _portfolio_curve(slices) -> list:
+    """Equal-weight mean of normalized per-ticker slice Series.
+
+    Aligns on the union of their dates and forward-fills, so a name with a
+    shorter history contributes only once it has data (leading gaps are NaN and
+    excluded from the mean). Returns the daily portfolio values.
+    """
+    if not slices:
+        return []
+    frame = pd.concat(slices, axis=1).sort_index().ffill()
+    return [float(v) for v in frame.mean(axis=1, skipna=True).tolist()]
+
+
+def _strategy_slice(df, ticker_trades):
+    """Normalized account value for one ticker over its history (starts at 1.0).
+
+    Flat while in cash; tracks close/entry_price while holding; locks in the
+    realized (cost-inclusive) factor on the trade's exit date, then flat again.
+    """
+    by_entry = {t["entry_date"]: t for t in ticker_trades}
+    factor = 1.0
+    entry_price = None
+    open_trade = None
+    out = []
+    for ts, close in zip(df.index, df["Close"]):
+        d = str(ts.date())
+        if open_trade is None and d in by_entry:
+            open_trade = by_entry[d]
+            entry_price = open_trade["entry_price"]
+        if open_trade is not None:
+            if d == open_trade["exit_date"]:
+                factor = factor * (1 + open_trade["return_pct"] / 100)
+                out.append(factor)
+                open_trade = None
+                entry_price = None
+            else:
+                out.append(factor * (float(close) / entry_price))
+        else:
+            out.append(factor)
+    return pd.Series(out, index=df.index)
+
+
+def strategy_equity_curve(histories, trades) -> list:
+    """Equal-weight daily portfolio curve for the strategy (cash between trades)."""
+    by_ticker = {}
+    for t in trades:
+        by_ticker.setdefault(t["ticker"], []).append(t)
+    slices = [_strategy_slice(df, by_ticker.get(ticker, []))
+              for ticker, df in histories.items()]
+    return _portfolio_curve(slices)
+
+
+def buy_and_hold_equity_curve(histories) -> list:
+    """Equal-weight daily portfolio curve for always-invested buy-and-hold."""
+    slices = []
+    for df in histories.values():
+        first = float(df["Close"].iloc[0])
+        if first:
+            slices.append(df["Close"].astype(float) / first)
+    return _portfolio_curve(slices)
+
+
 def render_backtest_report(summary, baseline, trades, date_str, label="default", sources=None) -> str:
     compounded = compounded_per_name(trades)
     L = [
