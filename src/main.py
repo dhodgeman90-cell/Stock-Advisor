@@ -18,6 +18,15 @@ def _build_market_summary(scored: list) -> str:
 
 
 def run() -> str:
+    # Make console output crash-proof: the briefing contains emojis that the
+    # legacy Windows console (cp1252) cannot encode. UTF-8 + replace avoids a
+    # UnicodeEncodeError without affecting the UTF-8 file that's saved.
+    import sys
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
     try:
         from dotenv import load_dotenv
         load_dotenv(ROOT / ".env")
