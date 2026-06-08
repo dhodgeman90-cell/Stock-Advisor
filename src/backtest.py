@@ -206,32 +206,36 @@ def render_backtest_report(summary, baseline, trades, date_str, label="default",
     return "\n".join(L) + "\n"
 
 
-def run() -> str:
-    wl = config.load_watchlist()
+def run(watchlist_name=None) -> str:
+    wl = config.load_watchlist(name=watchlist_name)
     weights = config.load_weights()
     rules = config.load_exit_rules()
     settings = wl["settings"]
     years = int(rules["backtest"]["window_years"])
     days = years * 365
+    data_dir = ROOT / "data"
 
     histories = {}
     all_trades = []
+    sources = {}
     for ticker in wl["tickers"]:
-        df = data.fetch_history(ticker, days)
-        ok, _ = data.validate(df, ticker)
-        if not ok:
+        df, source = _load_history(ticker, days, data_dir)
+        sources[ticker] = source
+        if df is None:
             continue
         histories[ticker] = df
         all_trades.extend(simulate_ticker(df, ticker, weights, settings, rules))
 
     summary = summarize(all_trades)
     baseline = buy_and_hold(histories)
+    label = watchlist_name or "default"
     date_str = dt.date.today().isoformat()
-    text = render_backtest_report(summary, baseline, all_trades, date_str)
+    text = render_backtest_report(summary, baseline, all_trades, date_str,
+                                  label=label, sources=sources)
 
     reports_dir = ROOT / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
-    (reports_dir / f"backtest-{date_str}.md").write_text(text, encoding="utf-8")
+    (reports_dir / f"backtest-{label}-{date_str}.md").write_text(text, encoding="utf-8")
 
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -242,4 +246,4 @@ def run() -> str:
 
 
 if __name__ == "__main__":
-    run()
+    run(sys.argv[1] if len(sys.argv) > 1 else None)
