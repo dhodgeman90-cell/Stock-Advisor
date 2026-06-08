@@ -10,6 +10,24 @@ MIN_HISTORY = 60   # 50 rows for the SMA-50 warm-up + ~10 days before the first 
 _EXIT_LEVELS = {"sell", "trim"}   # signal levels that close a backtest trade
 
 
+def _load_history(ticker, days, data_dir):
+    """Return (df_or_None, source). Tries live fetch, falls back to cache.
+
+    source is 'live', 'cache', or 'skipped'. Never raises on a bad fetch.
+    """
+    try:
+        df = data.fetch_history(ticker, days)
+    except Exception:
+        df = None
+    if df is not None and data.validate(df, ticker)[0]:
+        data.save_cache(df, ticker, data_dir)
+        return df, "live"
+    cached = data.load_cache(ticker, data_dir)
+    if cached is not None and data.validate(cached, ticker)[0]:
+        return cached, "cache"
+    return None, "skipped"
+
+
 def _net_return(entry_price, exit_price, rules) -> float:
     """Trade return (%) after a round-trip transaction cost."""
     raw = (exit_price - entry_price) / entry_price * 100

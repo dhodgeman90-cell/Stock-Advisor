@@ -1,5 +1,6 @@
 import pandas as pd
 from src import backtest
+from src import data as _data
 from tests.helpers import make_df
 
 # Low buy_threshold (0) so any valid day triggers entry, letting us test the
@@ -170,6 +171,33 @@ def test_summarize_includes_expectancy():
     s = backtest.summarize(trades)
     # 0.5*20 + 0.5*(-8) = 6.0
     assert round(s["expectancy"], 1) == 6.0
+
+
+def test_load_history_uses_cache_when_fetch_fails(monkeypatch, tmp_path):
+    good = make_df([100.0] * 60)
+    monkeypatch.setattr(_data, "fetch_history", lambda t, d: (_ for _ in ()).throw(RuntimeError("net down")))
+    monkeypatch.setattr(_data, "load_cache", lambda t, dd: good)
+    df, source = backtest._load_history("T", 730, tmp_path)
+    assert source == "cache"
+    assert df is not None
+
+
+def test_load_history_skips_when_no_data_anywhere(monkeypatch, tmp_path):
+    monkeypatch.setattr(_data, "fetch_history", lambda t, d: None)
+    monkeypatch.setattr(_data, "load_cache", lambda t, dd: None)
+    df, source = backtest._load_history("T", 730, tmp_path)
+    assert source == "skipped"
+    assert df is None
+
+
+def test_load_history_saves_cache_on_live_success(monkeypatch, tmp_path):
+    good = make_df([100.0] * 60)
+    saved = {}
+    monkeypatch.setattr(_data, "fetch_history", lambda t, d: good)
+    monkeypatch.setattr(_data, "save_cache", lambda df, t, dd: saved.update({t: True}))
+    df, source = backtest._load_history("T", 730, tmp_path)
+    assert source == "live"
+    assert saved.get("T") is True
 
 
 def test_report_drops_misleading_sum_and_shows_compounded():
