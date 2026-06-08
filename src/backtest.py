@@ -313,10 +313,13 @@ def run(watchlist_name=None) -> str:
 
     summary = summarize(all_trades)
     baseline = buy_and_hold(histories)
+    strategy_dd = max_drawdown(strategy_equity_curve(histories, all_trades))
+    buyhold_dd = max_drawdown(buy_and_hold_equity_curve(histories))
     label = watchlist_name or "default"
     date_str = dt.date.today().isoformat()
     text = render_backtest_report(summary, baseline, all_trades, date_str,
-                                  label=label, sources=sources)
+                                  label=label, sources=sources,
+                                  strategy_dd=strategy_dd, buyhold_dd=buyhold_dd)
 
     reports_dir = ROOT / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
