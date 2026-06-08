@@ -102,3 +102,63 @@ Results are saved to `reports/backtest-YYYY-MM-DD.md` and also printed to the te
 > Overfitting is a real risk — the same data used to tune thresholds will look
 > flattering in hindsight. Treat results skeptically and confirm with paper trading
 > before risking real money.
+
+---
+
+## Automation (Phase 4) — hands-off daily briefing
+
+Run the briefing automatically every weekday at 7:00 AM and email it to yourself.
+
+### 1. Set up email (one time)
+
+The briefing emails itself whenever `EMAIL_*` are set in `.env`.
+
+1. Turn on 2-Step Verification for your Google account.
+2. Create a Gmail **App Password**: Google Account -> Security -> 2-Step
+   Verification -> App passwords. Name it "Stock Advisor". Copy the 16-character
+   password.
+3. In `.env`, set:
+   - `EMAIL_USER` = your Gmail address
+   - `EMAIL_PASSWORD` = the 16-character App Password (not your normal password)
+   - `EMAIL_TO` = where to send it (your own address is fine)
+   (`EMAIL_HOST`/`EMAIL_PORT` already default to Gmail's SSL settings.)
+
+> To send to more than one person later, make `EMAIL_TO` a comma-separated list.
+> (Private Bcc sharing is a small future addition.)
+
+### 2. Verify email by hand BEFORE scheduling
+
+```powershell
+& .\.venv\Scripts\python.exe -m src.main
+```
+
+Confirm the briefing lands in your inbox. Only continue once it does.
+
+### 3. Schedule it
+
+Preview first, then register:
+
+```powershell
+.\scripts\setup-schedule.ps1 -WhatIf    # preview — creates nothing
+.\scripts\setup-schedule.ps1            # actually register the task
+```
+
+If it warns that wake timers are off, follow the printed `powercfg` fix (or ignore
+it — the task still runs the next time you turn the PC on).
+
+### 4. Test the task without waiting for 7:00 AM
+
+```powershell
+Start-ScheduledTask -TaskName StockAdvisorDailyBriefing
+Get-Content (".\logs\briefing-{0:yyyy-MM-dd}.log" -f (Get-Date)) -Tail 20
+```
+
+You should see the run logged and the email arrive.
+
+### Manage it
+
+```powershell
+Get-ScheduledTask     -TaskName StockAdvisorDailyBriefing   # see it / its state
+Get-ScheduledTaskInfo -TaskName StockAdvisorDailyBriefing   # last run time + result
+.\scripts\remove-schedule.ps1                               # stop automation
+```
