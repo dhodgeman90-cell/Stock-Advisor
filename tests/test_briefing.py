@@ -43,3 +43,53 @@ def test_send_email_logs_in_and_sends():
     assert fake.logged_in == ("me@test.com", "pw")
     assert fake.sent_message["Subject"] == "Subject Line"
     assert fake.sent_message["To"] == "you@test.com"
+
+
+def _holding(ticker, price, pct, signals, risk_flag=None):
+    h = {"ticker": ticker, "current_price": price, "pct_from_entry": pct, "signals": signals}
+    if risk_flag:
+        h["risk_flag"] = risk_flag
+    return h
+
+
+def test_render_holdings_section_empty():
+    text = briefing.render_holdings_section([])
+    assert "No tracked positions" in text
+
+
+def test_render_holdings_section_shows_signals_and_clean_lines():
+    holdings = [
+        _holding("NVDA", 109.0, -9.2,
+                 [{"type": "stop_loss", "level": "sell", "emoji": "🔴",
+                   "detail": "down 9.2% from entry (stop -8%)"}]),
+        _holding("AAPL", 150.0, 5.0, []),   # clean
+    ]
+    text = briefing.render_holdings_section(holdings)
+    assert "NVDA" in text
+    assert "stop loss" in text                 # underscores rendered as spaces
+    assert "down 9.2%" in text
+    assert "no exit signal" in text            # clean holding line for AAPL
+
+
+def test_render_holdings_section_shows_risk_flag():
+    holdings = [_holding("NVDA", 109.0, -3.0, [], risk_flag="earnings tomorrow")]
+    text = briefing.render_holdings_section(holdings)
+    assert "⚠️" in text
+    assert "earnings tomorrow" in text
+
+
+def test_render_holdings_section_handles_unavailable_price():
+    holdings = [_holding("NVDA", float("nan"), 0.0, [], risk_flag="no valid price data")]
+    text = briefing.render_holdings_section(holdings)
+    assert "price unavailable" in text
+    assert "nan" not in text.lower()
+
+
+def test_render_briefing_puts_holdings_above_candidates():
+    ranked = [_adjudicated("HI", 88, 80, "new deal", "low", "no flags", ["+15 catalyst"])]
+    holdings = [_holding("NVDA", 109.0, -9.2,
+                         [{"type": "stop_loss", "level": "sell", "emoji": "🔴",
+                           "detail": "down 9.2%"}])]
+    text = briefing.render_briefing(ranked, [], [], [], "2026-06-08",
+                                    "risk_on", "Upbeat.", holdings=holdings)
+    assert text.index("NVDA") < text.index("Top candidates")

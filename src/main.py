@@ -2,7 +2,7 @@ import datetime as dt
 import os
 from pathlib import Path
 
-from src import config, data, scoring, news, agents, adjudicator, briefing, report
+from src import config, data, scoring, news, agents, adjudicator, briefing, report, exits
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -61,10 +61,37 @@ def run() -> str:
         result["_df"] = df if not result["excluded"] else None
         scored.append(result)
 
+    # ---- Phase 3: evaluate exit signals on current holdings ----
+    positions = config.load_positions()
+    exit_rules = config.load_exit_rules()
+    df_by_ticker = {s["ticker"]: s.get("_df") for s in scored if s.get("_df") is not None}
+
+    holdings = []
+    for pos in positions:
+        df = df_by_ticker.get(pos["ticker"])
+        ok = df is not None
+        if df is None:
+            # held ticker not on the watchlist — fetch it (with cache fallback)
+            df = data.fetch_history(pos["ticker"], lookback)
+            ok, _ = data.validate(df, pos["ticker"])
+            if ok:
+                data.save_cache(df, pos["ticker"], data_dir)
+            else:
+                df = data.load_cache(pos["ticker"], data_dir)
+                ok = df is not None and data.validate(df, pos["ticker"])[0]
+        if not ok:
+            holdings.append({
+                "ticker": pos["ticker"], "current_price": float("nan"),
+                "pct_from_entry": 0.0, "signals": [],
+                "risk_flag": "no valid price data",
+            })
+            continue
+        holdings.append(exits.evaluate_exit(df, pos, exit_rules))
+
     # Graceful fallback: no API key -> deterministic-only report (Phase 1 behavior)
     if not os.environ.get("ANTHROPIC_API_KEY"):
         clean = [{k: v for k, v in s.items() if k != "_df"} for s in scored]
-        text = report.render_report(clean, date_str)
+        text = briefing.render_holdings_section(holdings) + "\n\n" + report.render_report(clean, date_str)
         (reports_dir / f"{date_str}.md").write_text(text, encoding="utf-8")
         print(text)
         print("\n[AI agents disabled: no ANTHROPIC_API_KEY in .env]")
@@ -95,8 +122,21 @@ def run() -> str:
         (vetoed if adjd["vetoed"] else ranked).append(adjd)
     ranked.sort(key=lambda r: r["final_score"], reverse=True)
 
+    # Optional: annotate held names with the Risk agent (annotates only; never drives exits)
+    for h in holdings:
+        try:
+            df_h = df_by_ticker.get(h["ticker"])
+            recent = list(df_h["Close"].tail(10)) if df_h is not None else []
+            rv = agents.risk_agent(client, h["ticker"], recent, news.get_headlines(h["ticker"]))
+            if rv.get("veto") or rv.get("risk_level") == "high":
+                # IMPORTANT: never set an empty/blank flag — fall back to a clear default
+                h["risk_flag"] = rv.get("reason") or "elevated risk"
+        except Exception:
+            pass   # annotation is best-effort; never break the briefing
+
     text = briefing.render_briefing(
-        ranked, vetoed, others, excluded, date_str, context["regime"], context["note"]
+        ranked, vetoed, others, excluded, date_str, context["regime"], context["note"],
+        holdings=holdings,
     )
     (reports_dir / f"{date_str}.md").write_text(text, encoding="utf-8")
     print(text)
