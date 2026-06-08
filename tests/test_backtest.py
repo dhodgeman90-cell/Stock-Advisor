@@ -146,3 +146,38 @@ def test_render_backtest_report_lists_trades_and_baseline():
     assert "Buy-and-hold baseline" in text
     assert "Avg return per trade" in text
     assert "not financial advice" in text.lower()
+
+
+def test_compounded_per_name_compounds_then_averages():
+    trades = [
+        {"ticker": "A", "return_pct": 10.0},   # A: 1.10 * 1.10 = 1.21 -> +21%
+        {"ticker": "A", "return_pct": 10.0},
+        {"ticker": "B", "return_pct": -50.0},  # B: -50%
+    ]
+    # average of +21% and -50% = -14.5%
+    assert round(backtest.compounded_per_name(trades), 1) == -14.5
+
+
+def test_compounded_per_name_empty():
+    assert backtest.compounded_per_name([]) == 0.0
+
+
+def test_summarize_includes_expectancy():
+    trades = [
+        {"return_pct": 20.0, "hold_days": 10, "reason": "take_profit"},
+        {"return_pct": -8.0, "hold_days": 3, "reason": "stop_loss"},
+    ]
+    s = backtest.summarize(trades)
+    # 0.5*20 + 0.5*(-8) = 6.0
+    assert round(s["expectancy"], 1) == 6.0
+
+
+def test_report_drops_misleading_sum_and_shows_compounded():
+    trades = [{"ticker": "AAA", "entry_date": "2024-01-01", "exit_date": "2024-01-05",
+               "entry_price": 100.0, "exit_price": 108.0, "return_pct": 8.0,
+               "hold_days": 4, "reason": "trailing_stop"}]
+    summary = backtest.summarize(trades)
+    text = backtest.render_backtest_report(summary, 5.0, trades, "2026-06-08")
+    assert "Sum of all" not in text                       # misleading headline removed
+    assert "compounded" in text.lower()
+    assert "Expectancy" in text

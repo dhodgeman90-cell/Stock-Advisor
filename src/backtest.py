@@ -95,20 +95,38 @@ def summarize(trades) -> dict:
     if not trades:
         return {"count": 0, "win_rate": 0.0, "avg_gain": 0.0, "avg_loss": 0.0,
                 "avg_hold": 0.0, "total_return": 0.0, "avg_trade_return": 0.0,
-                "by_reason": Counter()}
+                "expectancy": 0.0, "by_reason": Counter()}
     rets = [t["return_pct"] for t in trades]
     wins = [r for r in rets if r > 0]
     losses = [r for r in rets if r <= 0]   # break-even (0%) counts as a loss (conservative)
+    avg_gain = (sum(wins) / len(wins)) if wins else 0.0
+    avg_loss = (sum(losses) / len(losses)) if losses else 0.0
     return {
         "count": len(trades),
         "win_rate": len(wins) / len(trades) * 100,
-        "avg_gain": (sum(wins) / len(wins)) if wins else 0.0,
-        "avg_loss": (sum(losses) / len(losses)) if losses else 0.0,
+        "avg_gain": avg_gain,
+        "avg_loss": avg_loss,
         "avg_hold": sum(t["hold_days"] for t in trades) / len(trades),
         "total_return": sum(rets),
         "avg_trade_return": sum(rets) / len(trades),
+        "expectancy": (len(wins) / len(trades)) * avg_gain
+                      + (len(losses) / len(trades)) * avg_loss,
         "by_reason": Counter(t["reason"] for t in trades),
     }
+
+
+def compounded_per_name(trades) -> float:
+    """Per-ticker sequential trades compound; average the result across tickers (%).
+
+    Comparable to per-name buy-and-hold because each ticker holds one trade at a time.
+    """
+    factors = {}
+    for t in trades:
+        factors[t["ticker"]] = factors.get(t["ticker"], 1.0) * (1 + t["return_pct"] / 100)
+    if not factors:
+        return 0.0
+    rets = [(f - 1) * 100 for f in factors.values()]
+    return sum(rets) / len(rets)
 
 
 def buy_and_hold(histories) -> float:
@@ -122,22 +140,21 @@ def buy_and_hold(histories) -> float:
     return (sum(rets) / len(rets)) if rets else 0.0
 
 
-def render_backtest_report(summary, baseline, trades, date_str) -> str:
+def render_backtest_report(summary, baseline, trades, date_str, label="default", sources=None) -> str:
+    compounded = compounded_per_name(trades)
     L = [
-        f"# Stock Advisor — Backtest ({date_str})",
+        f"# Stock Advisor — Backtest ({label}, {date_str})",
         "",
         f"- Trades: **{summary['count']}**",
         f"- Win rate: **{summary['win_rate']:.0f}%**",
         f"- Avg gain: **{summary['avg_gain']:+.1f}%**  |  Avg loss: **{summary['avg_loss']:+.1f}%**",
+        f"- Expectancy per trade: **{summary['expectancy']:+.1f}%**",
         f"- Avg hold: **{summary['avg_hold']:.0f}** trading days",
         "",
-        "### Strategy vs buy-and-hold (comparable, per-position average)",
-        f"- Avg return per trade: **{summary['avg_trade_return']:+.1f}%**",
+        "### Strategy vs buy-and-hold (per name, comparable)",
+        f"- Strategy return per name (compounded): **{compounded:+.1f}%**",
         f"- Buy-and-hold baseline (avg per watchlist name): **{baseline:+.1f}%**",
-        "",
-        (f"_Sum of all {summary['count']} trade returns: {summary['total_return']:+.1f}%. "
-         f"This is a tally of independent trades, not a compounded account balance — "
-         f"don't compare it directly to buy-and-hold._"),
+        f"- Avg return per trade: **{summary['avg_trade_return']:+.1f}%**",
         "",
         "## Exit reasons",
     ]
@@ -146,6 +163,12 @@ def render_backtest_report(summary, baseline, trades, date_str) -> str:
             L.append(f"- {reason.replace('_', ' ')}: {count}")
     else:
         L.append("_No trades._")
+    if sources:
+        tally = Counter(sources.values())
+        L.append("")
+        L.append("## Data sources")
+        for src, n in tally.most_common():
+            L.append(f"- {src}: {n} tickers")
     L.append("")
     L.append("## Trades")
     if trades:
