@@ -1,3 +1,5 @@
+import datetime as dt
+
 from src import data
 from tests.helpers import make_df
 
@@ -32,3 +34,10 @@ def test_cache_round_trip(tmp_path):
 
 def test_load_cache_missing_returns_none(tmp_path):
     assert data.load_cache("NOPE", tmp_path) is None
+
+
+def test_window_bounds_honors_days_plus_warmup():
+    today = dt.date(2026, 6, 8)
+    start, end = data._window_bounds(730, today=today, warmup=100)
+    assert start == "2024-02-29"          # 2026-06-08 minus 830 days (730 + 100 warmup)
+    assert end == "2026-06-09"            # today + 1 day (yfinance end is exclusive)

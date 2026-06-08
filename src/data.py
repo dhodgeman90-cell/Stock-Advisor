@@ -1,7 +1,9 @@
+import datetime as dt
 from pathlib import Path
 import pandas as pd
 
 REQUIRED_COLS = ["Open", "High", "Low", "Close", "Volume"]
+WARMUP_DAYS = 100   # extra calendar days so the SMA-50 / MIN_HISTORY ramp is warm
 
 
 def validate(df, ticker: str, min_rows: int = 50):
@@ -34,14 +36,30 @@ def load_cache(ticker: str, data_dir):
     return None
 
 
+def _window_bounds(days, today=None, warmup=WARMUP_DAYS):
+    """Return (start_iso, end_iso) for an explicit yfinance date range.
+
+    end is exclusive (yfinance convention) so we add one day to include today.
+    """
+    today = today or dt.date.today()
+    start = today - dt.timedelta(days=int(days) + int(warmup))
+    end = today + dt.timedelta(days=1)
+    return start.isoformat(), end.isoformat()
+
+
 def fetch_history(ticker: str, days: int):
-    """Download daily OHLCV from yfinance. Network call — not used in tests."""
+    """Download daily OHLCV from yfinance over an explicit date window.
+
+    Network call — not used in tests. The window is days + WARMUP_DAYS calendar
+    days so the requested `days` span is fully usable after indicator warm-up.
+    """
     import yfinance as yf
 
-    period_days = int(days * 1.6) + 10  # buffer for weekends/holidays
+    start, end = _window_bounds(days)
     df = yf.download(
         ticker,
-        period=f"{period_days}d",
+        start=start,
+        end=end,
         interval="1d",
         auto_adjust=True,
         progress=False,
