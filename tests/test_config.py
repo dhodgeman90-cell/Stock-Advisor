@@ -118,3 +118,21 @@ def test_load_positions_rejects_missing_required_fields(tmp_path):
     )
     with pytest.raises(ValueError):
         config.load_positions(cfg)
+
+
+def test_load_positions_rejects_missing_positions_key(tmp_path):
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    (cfg / "positions.yaml").write_text("holdings:\n  - ticker: NVDA\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        config.load_positions(cfg)
+
+
+def test_load_positions_rejects_zero_entry_price(tmp_path):
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    (cfg / "positions.yaml").write_text(
+        "positions:\n  - ticker: NVDA\n    entry_price: 0\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError):
+        config.load_positions(cfg)

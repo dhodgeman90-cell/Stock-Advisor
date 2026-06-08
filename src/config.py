@@ -57,13 +57,20 @@ def load_positions(config_dir=CONFIG_DIR) -> list:
         data = yaml.safe_load(f)
     if not data:
         return []
-    raw = data.get("positions") or []
+    if "positions" not in data:
+        raise ValueError(
+            "positions.yaml must contain a 'positions' key "
+            "(use 'positions: []' if you hold nothing)"
+        )
+    raw = data["positions"] or []
     if not isinstance(raw, list):
         raise ValueError("positions.yaml 'positions' must be a list")
     out = []
     for p in raw:
         if "ticker" not in p or "entry_price" not in p:
             raise ValueError("each position requires 'ticker' and 'entry_price'")
+        if float(p["entry_price"]) <= 0:
+            raise ValueError(f"{p['ticker']}: entry_price must be greater than 0")
         out.append({
             "ticker": str(p["ticker"]).upper(),
             "entry_price": float(p["entry_price"]),
