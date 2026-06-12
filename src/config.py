@@ -50,6 +50,41 @@ def load_exit_rules(config_dir=CONFIG_DIR) -> dict:
     return {"defaults": defaults, "backtest": backtest}
 
 
+def load_position_overrides(config_dir=CONFIG_DIR) -> dict:
+    """Optional per-ticker overrides from positions.yaml, keyed by upper-cased ticker.
+
+    Once SnapTrade supplies live holdings, positions.yaml is demoted to an *overrides*
+    file: it no longer needs `entry_price`/`shares`, only the optional knobs you want to
+    pin per ticker. Returns only the fields actually present (so a merge won't clobber
+    live values with None). Best-effort: a missing/blank file yields {} rather than raising.
+    """
+    path = Path(config_dir) / "positions.yaml"
+    if not path.exists():
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    if not data or "positions" not in data:
+        return {}
+    raw = data["positions"] or []
+    overrides = {}
+    for p in raw:
+        ticker = p.get("ticker")
+        if not ticker:
+            continue
+        fields = {
+            k: p[k]
+            for k in ("stop_loss_pct", "take_profit_pct", "trailing_stop_pct")
+            if p.get(k) is not None
+        }
+        if p.get("entry_date") is not None:
+            # YAML parses bare dates into datetime.date; normalize to a string to match
+            # load_positions() and the downstream pd.Timestamp(entry_date) usage.
+            fields["entry_date"] = str(p["entry_date"])
+        if fields:
+            overrides[str(ticker).upper()] = fields
+    return overrides
+
+
 def load_positions(config_dir=CONFIG_DIR) -> list:
     path = Path(config_dir) / "positions.yaml"
     if not path.exists():

@@ -30,13 +30,48 @@ pytest -v
 
 ### Holdings & exit signals
 
-Edit `config/positions.yaml` to track what you own. The file is checked in to the
-repo so it stays with your other settings — update it whenever you buy or sell.
+You can track holdings two ways — pick one:
+
+#### Option A — Automatic sync from Robinhood (recommended)
+
+Connect your Robinhood account once through **SnapTrade** (a sanctioned brokerage-data
+API) and every briefing pulls your live holdings *and your real average cost* automatically
+— no more hand-editing files, no inaccurate back-calculated entry prices.
+
+**Why SnapTrade and not a Robinhood password?** Robinhood has no official API. SnapTrade
+handles the login + 2FA **once** at connection time and stores scoped tokens instead of your
+password, so the unattended 7 AM briefing never gets stuck waiting for a 2FA code. Free tier
+covers one user with up to five brokerage connections — fine for personal use.
+
+**One-time setup (~15 min):**
+
+1. Create a free account at <https://snaptrade.com>, make an app, and copy its
+   `clientId` + `consumerKey` into `.env` as `SNAPTRADE_CLIENT_ID` / `SNAPTRADE_CONSUMER_KEY`.
+2. Run the linker and follow the prompts:
+   ```powershell
+   & .\.venv\Scripts\python.exe -m src.link_broker
+   ```
+   It registers you, prints a `SNAPTRADE_USER_SECRET` to paste into `.env`, then opens a
+   browser so you can log into Robinhood and approve access. It finishes by confirming the
+   holdings it detected.
+3. Done. Holdings now refresh automatically before every briefing.
+
+If SnapTrade is ever unreachable, the briefing automatically falls back to `positions.yaml`
+(below), so your morning email never breaks.
+
+#### Option B — Manual `positions.yaml`
+
+If you don't connect SnapTrade, track holdings by editing `config/positions.yaml`.
 
 **Minimum required fields:** `ticker` and `entry_price`.
 **Optional fields:** `entry_date`, `shares`, and per-position threshold overrides
 `stop_loss_pct` / `take_profit_pct` (these override the defaults in `exits.yaml`).
 Use `positions: []` when you hold nothing.
+
+> **When SnapTrade is connected**, `positions.yaml` becomes an optional *overrides* file:
+> SnapTrade supplies the live ticker/shares/cost basis, and any `stop_loss_pct`,
+> `take_profit_pct`, `trailing_stop_pct`, or `entry_date` you list for a ticker is merged on
+> top. You can blank it to `positions: []` so your real holdings aren't committed to git.
 
 ```yaml
 # config/positions.yaml

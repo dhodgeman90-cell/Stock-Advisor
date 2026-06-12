@@ -1,5 +1,6 @@
 # secrets & generated data — never commit
 .env
+.env.bak
 data/
 reports/
 logs/
@@ -9,3 +10,6 @@ __pycache__/
 .venv/
 venv/
 .pytest_cache/
+
+# visual brainstorm scratch
+.superpowers/

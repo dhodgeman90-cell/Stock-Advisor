@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from src import config, data, scoring, news, agents, adjudicator, briefing, report, exits
+from src import config, data, scoring, news, agents, adjudicator, briefing, report, exits, broker
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -64,7 +64,12 @@ def run() -> str:
         scored.append(result)
 
     # ---- Phase 3: evaluate exit signals on current holdings ----
-    positions = config.load_positions()
+    # Holdings come from SnapTrade (live Robinhood sync) when configured, otherwise from
+    # positions.yaml. A sync failure degrades gracefully to positions.yaml so the daily
+    # briefing never breaks on a SnapTrade outage.
+    positions = broker.resolve_positions(
+        on_error=lambda e: print(f"[holdings: SnapTrade sync failed, using positions.yaml: {e}]")
+    )
     exit_rules = config.load_exit_rules()
     df_by_ticker = {s["ticker"]: s.get("_df") for s in scored if s.get("_df") is not None}
 

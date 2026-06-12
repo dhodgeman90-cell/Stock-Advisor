@@ -15,6 +15,44 @@ class BoomClient:
         raise RuntimeError("boom")
 
 
+class _Resp:
+    """Stand-in for the SnapTrade SDK's ApiResponse: exposes parsed JSON via .body."""
+
+    def __init__(self, body):
+        self.body = body
+
+
+class _FakeAccountInfo:
+    def __init__(self, accounts, positions_by_account):
+        self._accounts = accounts
+        self._positions_by_account = positions_by_account
+        self.positions_calls = []   # account_ids queried, in order
+
+    def list_user_accounts(self, user_id=None, user_secret=None):
+        return _Resp(list(self._accounts))
+
+    def get_user_account_positions(self, user_id=None, user_secret=None, account_id=None):
+        self.positions_calls.append(account_id)
+        return _Resp(list(self._positions_by_account.get(account_id, [])))
+
+
+class FakeSnapTrade:
+    """Minimal SnapTrade SDK stand-in serving canned accounts + positions."""
+
+    def __init__(self, accounts, positions_by_account):
+        self.account_information = _FakeAccountInfo(accounts, positions_by_account)
+
+
+def snaptrade_position(ticker, units, average_purchase_price, price=None):
+    """A raw SnapTrade position dict with the real nesting (ticker at symbol.symbol.symbol)."""
+    return {
+        "symbol": {"symbol": {"symbol": ticker, "raw_symbol": ticker}},
+        "units": units,
+        "average_purchase_price": average_purchase_price,
+        "price": average_purchase_price if price is None else price,
+    }
+
+
 class FakeSMTP:
     """SMTP stand-in usable as a context manager; records login + sent message."""
 

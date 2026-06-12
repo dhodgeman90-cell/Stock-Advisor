@@ -151,3 +151,43 @@ def test_load_positions_reads_trailing_stop_override(tmp_path):
         encoding="utf-8")
     pos = config.load_positions(config_dir=tmp_path)
     assert pos[0]["trailing_stop_pct"] == 12
+
+
+def test_load_position_overrides_returns_only_present_fields_by_ticker(tmp_path):
+    # Overrides are keyed by upper-cased ticker; entry_price is NOT required here,
+    # because positions.yaml is demoted to an optional overrides file once SnapTrade
+    # provides the live holdings.
+    (tmp_path / "positions.yaml").write_text(
+        "positions:\n"
+        "  - ticker: nvda\n"
+        "    stop_loss_pct: 10\n"
+        "    take_profit_pct: 25\n"
+        "    entry_date: 2026-06-01\n"
+        "  - ticker: aapl\n"
+        "    trailing_stop_pct: 12\n",
+        encoding="utf-8",
+    )
+    ov = config.load_position_overrides(config_dir=tmp_path)
+    assert ov["NVDA"] == {
+        "stop_loss_pct": 10,
+        "take_profit_pct": 25,
+        "entry_date": "2026-06-01",
+    }
+    assert ov["AAPL"] == {"trailing_stop_pct": 12}
+
+
+def test_load_position_overrides_skips_tickers_without_overrides(tmp_path):
+    # A ticker with only ticker/entry_price/shares contributes no override entry.
+    (tmp_path / "positions.yaml").write_text(
+        "positions:\n  - ticker: TSLA\n    entry_price: 374.67\n    shares: 0.05\n",
+        encoding="utf-8",
+    )
+    assert config.load_position_overrides(config_dir=tmp_path) == {}
+
+
+def test_load_position_overrides_empty_when_missing_or_blank(tmp_path):
+    # No file at all -> empty dict (no crash).
+    assert config.load_position_overrides(config_dir=tmp_path) == {}
+    # Present but holding nothing -> empty dict.
+    (tmp_path / "positions.yaml").write_text("positions: []\n", encoding="utf-8")
+    assert config.load_position_overrides(config_dir=tmp_path) == {}

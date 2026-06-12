@@ -21,7 +21,7 @@ def render_holdings_section(holdings) -> str:
     """Markdown block for current holdings + their exit signals. Leads the briefing."""
     lines = ["## 📊 Your holdings"]
     if not holdings:
-        lines.append("_No tracked positions. Keep `positions.yaml` current as you buy and sell._")
+        lines.append("_No tracked positions._")
         return "\n".join(lines)
     for h in holdings:
         price = h["current_price"]
@@ -39,8 +39,6 @@ def render_holdings_section(holdings) -> str:
             lines.append("    - 🟢 holding — no exit signal")
         if h.get("risk_flag"):
             lines.append(f"    - ⚠️ {h['risk_flag']}")
-    lines.append("")
-    lines.append("_Reminder: keep `positions.yaml` current as you buy and sell._")
     return "\n".join(lines)
 
 
@@ -95,7 +93,7 @@ def _holdings_html(holdings, e) -> str:
     """HTML table of holdings with a color-coded signal pill per row."""
     if not holdings:
         return ('<div style="font-size:12.5px;color:#6b7280;">'
-                'No tracked positions. Keep positions.yaml current as you buy and sell.</div>')
+                'No tracked positions.</div>')
     rows = [
         '<tr style="color:#6b7280;text-align:left;">'
         '<th style="padding:7px 8px;border-bottom:2px solid #0f3d2e;font-weight:600;">Ticker</th>'
