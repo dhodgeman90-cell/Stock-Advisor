@@ -9,6 +9,18 @@ def _ct(ticker, side, low, high, disclosure):
             "transaction_date": disclosure, "disclosure_date": disclosure}
 
 
+def test_should_skip_weekend_skips_saturday_and_sunday_only():
+    assert main._should_skip_weekend(dt.date(2026, 6, 13)) is True   # Saturday
+    assert main._should_skip_weekend(dt.date(2026, 6, 14)) is True   # Sunday
+    for d in range(8, 13):                                           # Mon-Fri
+        assert main._should_skip_weekend(dt.date(2026, 6, d)) is False
+
+
+def test_should_skip_weekend_force_overrides_the_weekend():
+    assert main._should_skip_weekend(dt.date(2026, 6, 13), force=True) is False
+    assert main._should_skip_weekend(dt.date(2026, 6, 14), force=True) is False
+
+
 def test_discovery_feed_excludes_known_tickers_and_small_or_quiet_names():
     today = dt.date(2026, 6, 12)
     congress_trades = [

@@ -12,6 +12,15 @@ ROOT = Path(__file__).resolve().parent.parent
 MAX_ADDS = 3   # most names the daily rotation will recommend buying into
 
 
+def _should_skip_weekend(today: dt.date, force: bool = False) -> bool:
+    """True on Saturday/Sunday so we don't spend API tokens or email on days the
+    market is closed. `force` (the --force flag) overrides it for manual testing.
+
+    Note: this only skips weekends, not market holidays — a holiday Monday still runs.
+    """
+    return today.weekday() >= 5 and not force
+
+
 def _build_market_summary(scored: list) -> str:
     cands = [s for s in scored if not s["excluded"]]
     if not cands:
@@ -53,7 +62,7 @@ def _discovery_feed(congress_trades, wsb_map, known_tickers, signals_cfg, today=
     return {"congress": congress_movers, "wsb": wsb_movers}
 
 
-def run() -> str:
+def run(force: bool = False) -> str:
     # Make console output crash-proof: the briefing contains emojis that the
     # legacy Windows console (cp1252) cannot encode. UTF-8 + replace avoids a
     # UnicodeEncodeError without affecting the UTF-8 file that's saved.
@@ -62,6 +71,14 @@ def run() -> str:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
+
+    # The market is closed on weekends, so a briefing then is just wasted API
+    # tokens and an email the owner can't act on. Bail out before any work.
+    # Run anyway with `python -m src.main --force` if you need to test on a weekend.
+    if _should_skip_weekend(dt.date.today(), force):
+        msg = "Weekend — market closed; skipping briefing (use --force to override)."
+        print(msg)
+        return msg
 
     try:
         from dotenv import load_dotenv
@@ -256,4 +273,5 @@ def run() -> str:
 
 
 if __name__ == "__main__":
-    run()
+    import sys
+    run(force="--force" in sys.argv[1:])
