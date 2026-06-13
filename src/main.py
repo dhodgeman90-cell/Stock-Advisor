@@ -12,13 +12,23 @@ ROOT = Path(__file__).resolve().parent.parent
 MAX_ADDS = 3   # most names the daily rotation will recommend buying into
 
 
-def _should_skip_weekend(today: dt.date, force: bool = False) -> bool:
-    """True on Saturday/Sunday so we don't spend API tokens or email on days the
-    market is closed. `force` (the --force flag) overrides it for manual testing.
+def _should_skip_today(today: dt.date, force: bool = False) -> bool:
+    """True when the NYSE has no session today (weekend OR market holiday), so we
+    don't spend API tokens or email a briefing the owner can't act on. `force`
+    (the --force flag) overrides it for manual testing.
 
-    Note: this only skips weekends, not market holidays — a holiday Monday still runs.
+    Uses the bundled NYSE calendar; if that import ever fails we fall back to a
+    weekend-only check so the weekend protection still holds. Half-days (e.g. the
+    day after Thanksgiving) DO have a session, so they correctly run.
     """
-    return today.weekday() >= 5 and not force
+    if force:
+        return False
+    try:
+        import pandas_market_calendars as mcal
+        schedule = mcal.get_calendar("NYSE").schedule(start_date=today, end_date=today)
+        return schedule.empty
+    except Exception:
+        return today.weekday() >= 5
 
 
 def _build_market_summary(scored: list) -> str:
@@ -72,11 +82,11 @@ def run(force: bool = False) -> str:
     except Exception:
         pass
 
-    # The market is closed on weekends, so a briefing then is just wasted API
-    # tokens and an email the owner can't act on. Bail out before any work.
-    # Run anyway with `python -m src.main --force` if you need to test on a weekend.
-    if _should_skip_weekend(dt.date.today(), force):
-        msg = "Weekend — market closed; skipping briefing (use --force to override)."
+    # The market is closed on weekends and holidays, so a briefing then is just
+    # wasted API tokens and an email the owner can't act on. Bail out before any
+    # work. Run anyway with `python -m src.main --force` to test on a closed day.
+    if _should_skip_today(dt.date.today(), force):
+        msg = "Market closed today (weekend/holiday); skipping briefing (use --force to override)."
         print(msg)
         return msg
 
