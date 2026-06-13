@@ -42,16 +42,105 @@ def render_holdings_section(holdings) -> str:
     return "\n".join(lines)
 
 
-def render_briefing(ranked, vetoed, others, excluded, date_str, regime, regime_note,
-                    holdings=None) -> str:
-    """Render the enriched daily briefing (Phase 2 + Phase 3 holdings).
+def _amount_range(low, high) -> str:
+    """Compact dollar range, e.g. '$100k–$250k' or '$50k'."""
+    def fmt(v):
+        return f"${v / 1000:.0f}k" if v >= 1000 else f"${v:.0f}"
+    return fmt(low) if low == high else f"{fmt(low)}–{fmt(high)}"
 
-    `ranked` is pre-sorted by final_score. `holdings` (Phase 3) leads the briefing.
+
+def _candidate_insight_lines(r) -> list:
+    """Plain insight strings (no markdown prefix) for the new signal sources.
+
+    Returns only the badges that actually have data, so a candidate with no congress /
+    insider / analyst / earnings / social signal stays uncluttered.
+    """
+    lines = []
+    c = r.get("congress")
+    if c and c.get("net_side"):
+        disc = c.get("most_recent_disclosure")
+        when = f", disclosed {disc}" if disc else ""
+        lines.append(f"🏛️ Congress {c['net_side']} ({c.get('n_members', 1)} member(s){when}) "
+                     f"— note: up to 45-day disclosure lag")
+    ins = r.get("insider")
+    if ins and ins.get("net_side"):
+        verb = "buying" if ins["net_side"] == "buy" else "selling"
+        lines.append(f"👔 Insider {verb} ({ins.get('n_buys', 0)} buys / {ins.get('n_sells', 0)} sells)")
+    a = r.get("analyst")
+    if a and a.get("rating"):
+        up = a.get("upside_pct")
+        up_txt = f", target {up:+.0f}%" if up is not None else ""
+        lines.append(f"🎯 Analysts {a['rating'].replace('_', ' ')}{up_txt}")
+    earn = r.get("earnings")
+    if earn and earn.get("days_until") is not None:
+        lines.append(f"📅 Earnings in {earn['days_until']}d — gap risk for a swing trade")
+    soc = r.get("social")
+    if soc:
+        lines.append(f"💬 {soc}")
+    return lines
+
+
+def render_rotation_section(plan) -> str:
+    """Markdown 'Today's rotation' block — the daily transition recommendation."""
+    plan = plan or {}
+    exits, trims = plan.get("exits", []), plan.get("trims", [])
+    adds, hold = plan.get("adds", []), plan.get("hold", [])
+    L = ["## 🔄 Today's rotation"]
+    if not (exits or trims or adds):
+        L.append("_No rotation today — hold steady._")
+        return "\n".join(L)
+    for x in exits:
+        L.append(f"- 🔴 **Exit {x['ticker']}** — {x['reason']}")
+    for t in trims:
+        L.append(f"- 🟡 **Trim {t['ticker']}** — {t['reason']}")
+    for a in adds:
+        tag = " (high conviction)" if a.get("conviction") == "high" else ""
+        L.append(f"- 🟢 **Add {a['ticker']}** ({a['final_score']:.0f}/100){tag} — {a['reason']}")
+    if hold:
+        L.append(f"- ⚪ Hold: {', '.join(h['ticker'] for h in hold)}")
+    return "\n".join(L)
+
+
+def render_discovery_section(congress_movers, wsb_movers) -> str:
+    """Markdown 'Outside the watchlist' block — actionable signals on untracked names.
+
+    Returns '' when there is nothing to surface, so the caller can omit it cleanly.
+    """
+    congress_movers = congress_movers or []
+    wsb_movers = wsb_movers or []
+    if not (congress_movers or wsb_movers):
+        return ""
+    L = ["## 🔭 Outside the watchlist",
+         "_Signals on names you don't hold or track. Congress filings carry up to a 45-day lag._"]
+    if congress_movers:
+        L.append("**Big congressional trades:**")
+        for t in congress_movers:
+            verb = "🟢 buy" if t["side"] == "buy" else "🔴 sell"
+            amt = _amount_range(t["amount_low"], t["amount_high"])
+            L.append(f"- **{t['ticker']}**: {verb} {amt} — {t['member']} "
+                     f"(disclosed {t['disclosure_date']})")
+    if wsb_movers:
+        L.append("**WSB surging:**")
+        for w in wsb_movers:
+            chg = w.get("mentions_change")
+            chg_txt = f" (+{chg} mentions)" if chg is not None else ""
+            L.append(f"- **{w['ticker']}**: {w['mentions']} mentions{chg_txt}")
+    return "\n".join(L)
+
+
+def render_briefing(ranked, vetoed, others, excluded, date_str, regime, regime_note,
+                    holdings=None, rotation_plan=None, discovery=None) -> str:
+    """Render the enriched daily briefing (Phase 2 + Phase 3 holdings + signal upgrade).
+
+    `ranked` is pre-sorted by final_score. The rotation plan and holdings lead the
+    briefing; the discovery feed (untracked signals) trails it.
     """
     L = [
         f"# Stock Advisor — {date_str}",
         "",
         f"**Market regime:** {regime} — {regime_note}",
+        "",
+        render_rotation_section(rotation_plan),
         "",
         render_holdings_section(holdings),
         "",
@@ -65,6 +154,8 @@ def render_briefing(ranked, vetoed, others, excluded, date_str, regime, regime_n
         L.append(f"    - 📰 {r['news']['summary']}")
         L.append(f"    - 🚩 risk {r['risk']['risk_level']}: {r['risk']['reason']}")
         L.append(f"    - adj: {adj}")
+        for line in _candidate_insight_lines(r):
+            L.append(f"    - {line}")
 
     if vetoed:
         L.append("")
@@ -83,6 +174,12 @@ def render_briefing(ranked, vetoed, others, excluded, date_str, regime, regime_n
         L.append("## Excluded (hard filters)")
         for e in excluded:
             L.append(f"- {e['ticker']}: {e['reason']}")
+
+    if discovery:
+        disc_text = render_discovery_section(discovery.get("congress"), discovery.get("wsb"))
+        if disc_text:
+            L.append("")
+            L.append(disc_text)
 
     L.append("")
     L.append("_Information only — not financial advice._")
@@ -140,6 +237,10 @@ def _holdings_html(holdings, e) -> str:
 def _candidate_card_html(r, e, green) -> str:
     """Left-bordered card for one ranked candidate."""
     adj = "  ".join(r["adjustments"]) or "no adjustments"
+    insight_html = "".join(
+        f'<div style="font-size:12px;color:#4b5563;margin-top:2px;">{e(line)}</div>'
+        for line in _candidate_insight_lines(r)
+    )
     return (
         f'<div style="border-left:3px solid {green};background:#f7faf8;'
         f'border-radius:0 8px 8px 0;padding:11px 13px;margin-bottom:9px;">'
@@ -150,12 +251,62 @@ def _candidate_card_html(r, e, green) -> str:
         f'<div style="font-size:12.5px;color:#4b5563;margin-top:4px;">📰 {e(r["news"]["summary"])}</div>'
         f'<div style="font-size:12.5px;color:#4b5563;">🚩 risk {e(r["risk"]["risk_level"])}: '
         f'{e(r["risk"]["reason"])}</div>'
+        f'{insight_html}'
         f'<div style="font-size:11.5px;color:#9ca3af;margin-top:3px;">adj: {e(adj)}</div></div>'
     )
 
 
+def _rotation_html(plan, e, green) -> str:
+    """Styled 'Today's rotation' block for the HTML email."""
+    plan = plan or {}
+    exits, trims = plan.get("exits", []), plan.get("trims", [])
+    adds, hold = plan.get("adds", []), plan.get("hold", [])
+    rows = []
+    if not (exits or trims or adds):
+        rows.append('<div style="font-size:12.5px;color:#6b7280;">No rotation today — hold steady.</div>')
+    else:
+        for x in exits:
+            rows.append(f'<div style="font-size:12.5px;color:#7f1d1d;">🔴 <b>Exit {e(x["ticker"])}</b> — {e(x["reason"])}</div>')
+        for t in trims:
+            rows.append(f'<div style="font-size:12.5px;color:#854d0e;">🟡 <b>Trim {e(t["ticker"])}</b> — {e(t["reason"])}</div>')
+        for a in adds:
+            tag = " (high conviction)" if a.get("conviction") == "high" else ""
+            rows.append(f'<div style="font-size:12.5px;color:#166534;">🟢 <b>Add {e(a["ticker"])}</b> '
+                        f'({a["final_score"]:.0f}/100){tag} — {e(a["reason"])}</div>')
+        if hold:
+            rows.append(f'<div style="font-size:12px;color:#6b7280;">⚪ Hold: '
+                        f'{e(", ".join(h["ticker"] for h in hold))}</div>')
+    return ('<div style="font-size:14px;font-weight:700;color:#0f172a;margin-bottom:8px;">'
+            '🔄 Today\'s rotation</div>'
+            f'<div style="background:#f7faf8;border-radius:8px;padding:11px 13px;'
+            f'border-left:3px solid {green};margin-bottom:6px;">' + "".join(rows) + '</div>')
+
+
+def _discovery_html(congress_movers, wsb_movers, e) -> str:
+    """Styled 'Outside the watchlist' block; '' when there is nothing to show."""
+    congress_movers = congress_movers or []
+    wsb_movers = wsb_movers or []
+    if not (congress_movers or wsb_movers):
+        return ""
+    rows = ['<div style="font-size:14px;font-weight:700;color:#0f172a;margin:20px 0 4px;">'
+            '🔭 Outside the watchlist</div>',
+            '<div style="font-size:11.5px;color:#9ca3af;margin-bottom:8px;">'
+            'Names you don\'t hold or track. Congress filings carry up to a 45-day lag.</div>']
+    for t in congress_movers:
+        verb = "🟢 buy" if t["side"] == "buy" else "🔴 sell"
+        amt = _amount_range(t["amount_low"], t["amount_high"])
+        rows.append(f'<div style="font-size:12.5px;color:#4b5563;"><b>{e(t["ticker"])}</b>: '
+                    f'{verb} {amt} — {e(t["member"])} (disclosed {e(str(t["disclosure_date"]))})</div>')
+    for w in wsb_movers:
+        chg = w.get("mentions_change")
+        chg_txt = f" (+{chg} mentions)" if chg is not None else ""
+        rows.append(f'<div style="font-size:12.5px;color:#4b5563;"><b>{e(w["ticker"])}</b>: '
+                    f'{w["mentions"]} mentions{e(chg_txt)}</div>')
+    return "".join(rows)
+
+
 def render_briefing_html(ranked, vetoed, others, excluded, date_str, regime,
-                         regime_note, holdings=None) -> str:
+                         regime_note, holdings=None, rotation_plan=None, discovery=None) -> str:
     """Styled HTML version of the daily briefing (plain-text fallback stays render_briefing)."""
     e = html.escape
     green = "#0f3d2e"
@@ -169,7 +320,8 @@ def render_briefing_html(ranked, vetoed, others, excluded, date_str, regime,
         f'<div style="font-size:12.5px;color:#a7d7c5;margin-top:2px;">'
         f'{e(date_str)} &middot; {e(regime)} — {e(regime_note)}</div></div>',
         '<div style="padding:18px 24px 22px;">',
-        '<div style="font-size:14px;font-weight:700;color:#0f172a;margin-bottom:10px;">'
+        _rotation_html(rotation_plan, e, green),
+        '<div style="font-size:14px;font-weight:700;color:#0f172a;margin:18px 0 10px;">'
         '📊 Your holdings</div>',
         _holdings_html(holdings or [], e),
         '<div style="font-size:14px;font-weight:700;color:#0f172a;margin:20px 0 10px;">'
@@ -201,6 +353,11 @@ def render_briefing_html(ranked, vetoed, others, excluded, date_str, regime,
         P.append('<div style="font-size:12.5px;font-weight:700;color:#374151;margin:14px 0 6px;">'
                  'Excluded (hard filters)</div>')
         P.append(f'<div style="font-size:12.5px;color:#9ca3af;">{items}</div>')
+
+    if discovery:
+        disc_html = _discovery_html(discovery.get("congress"), discovery.get("wsb"), e)
+        if disc_html:
+            P.append(disc_html)
 
     P.append('<div style="font-size:11.5px;color:#9ca3af;border-top:1px solid #eef0f3;'
              'padding-top:12px;margin-top:18px;">Information only — not financial advice.</div>')

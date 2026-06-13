@@ -4,9 +4,12 @@ from pathlib import Path
 
 import pandas as pd
 
-from src import config, data, scoring, news, agents, adjudicator, briefing, report, exits, broker
+from src import (config, data, scoring, news, agents, adjudicator, briefing,
+                 exits, broker, social, congress, insights, market, rotation)
 
 ROOT = Path(__file__).resolve().parent.parent
+
+MAX_ADDS = 3   # most names the daily rotation will recommend buying into
 
 
 def _build_market_summary(scored: list) -> str:
@@ -17,6 +20,37 @@ def _build_market_summary(scored: list) -> str:
     up = sum(1 for s in cands if s["components"]["trend"] >= 1.0)
     return (f"{up}/{len(cands)} watchlist names in a clear uptrend; "
             f"average momentum score {avg:.0f}/100.")
+
+
+def _discovery_feed(congress_trades, wsb_map, known_tickers, signals_cfg, today=None) -> dict:
+    """Surface actionable signals on names the owner does NOT already hold or track.
+
+    Congress side: large, recently-disclosed trades. WSB side: names with real mention
+    volume that are climbing. Both exclude known tickers (those already appear in the
+    main briefing) and are capped at the configured top_n.
+    """
+    thr = signals_cfg["thresholds"]
+    disc = signals_cfg["discovery"]
+    known = {str(t).upper() for t in known_tickers}
+
+    big = congress.recent_large_trades(
+        congress_trades, min_amount=thr["congress_large_usd"],
+        lookback_days=disc["congress_lookback_days"], today=today,
+    )
+    congress_movers = [t for t in big if t["ticker"] not in known][:disc["top_n"]]
+
+    wsb_movers = []
+    for ticker, sig in sorted(wsb_map.items(),
+                              key=lambda kv: (kv[1].get("mentions_change") or 0), reverse=True):
+        if ticker in known or (sig.get("mentions") or 0) < thr["social_min_mentions"]:
+            continue
+        if (sig.get("mentions_change") or 0) <= 0:
+            continue
+        wsb_movers.append({"ticker": ticker, "mentions": sig["mentions"],
+                           "mentions_change": sig.get("mentions_change")})
+        if len(wsb_movers) >= disc["top_n"]:
+            break
+    return {"congress": congress_movers, "wsb": wsb_movers}
 
 
 def run() -> str:
@@ -37,6 +71,9 @@ def run() -> str:
 
     wl = config.load_watchlist()
     weights = config.load_weights()
+    caps = config.load_adjudicator()
+    signals_cfg = config.load_signals()
+    thr = signals_cfg["thresholds"]
     settings = wl["settings"]
     lookback = settings.get("lookback_days", 200)
     shortlist_size = settings.get("shortlist_size", 8)
@@ -64,9 +101,6 @@ def run() -> str:
         scored.append(result)
 
     # ---- Phase 3: evaluate exit signals on current holdings ----
-    # Holdings come from SnapTrade (live Robinhood sync) when configured, otherwise from
-    # positions.yaml. A sync failure degrades gracefully to positions.yaml so the daily
-    # briefing never breaks on a SnapTrade outage.
     positions = broker.resolve_positions(
         on_error=lambda e: print(f"[holdings: SnapTrade sync failed, using positions.yaml: {e}]")
     )
@@ -78,7 +112,6 @@ def run() -> str:
         df = df_by_ticker.get(pos["ticker"])
         ok = df is not None
         if df is None:
-            # held ticker not on the watchlist — fetch it (with cache fallback)
             df = data.fetch_history(pos["ticker"], lookback)
             ok, _ = data.validate(df, pos["ticker"])
             if ok:
@@ -104,18 +137,33 @@ def run() -> str:
             peak = float(pos["entry_price"])
         holdings.append(exits.evaluate_exit(df, {**pos, "peak_price": peak}, exit_rules))
 
-    # Graceful fallback: no API key -> deterministic-only report (Phase 1 behavior)
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        clean = [{k: v for k, v in s.items() if k != "_df"} for s in scored]
-        text = briefing.render_holdings_section(holdings) + "\n\n" + report.render_report(clean, date_str)
-        (reports_dir / f"{date_str}.md").write_text(text, encoding="utf-8")
-        print(text)
-        print("\n[AI agents disabled: no ANTHROPIC_API_KEY in .env]")
-        return text
+    # ---- New signal sources: fetch the market-wide feeds once (all fall back gracefully) ----
+    wsb_map = social.get_wsb_sentiment()
+    congress_trades = congress.get_congress_trades()
+    congress_agg = congress.aggregate_by_ticker(congress_trades)
+    breadth = market.get_market_breadth()
 
-    from src import llm
-    client = llm.AnthropicClient()
-    caps = config.load_adjudicator()
+    # Attach smart-money signals to holdings so the rotation can spot insiders/congress leaving.
+    for h in holdings:
+        h["congress"] = congress_agg.get(h["ticker"])
+        h["insider"] = insights.get_insider_signal(h["ticker"])
+
+    known = set(wl["tickers"]) | {h["ticker"] for h in holdings}
+    discovery = _discovery_feed(congress_trades, wsb_map, known, signals_cfg)
+
+    has_llm = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    client = None
+    if has_llm:
+        from src import llm
+        client = llm.AnthropicClient()
+
+    # Market regime: the LLM strategist when available, otherwise the deterministic
+    # VIX/breadth read so the free-tier brief still gets a real regime call.
+    if has_llm:
+        summary = _build_market_summary(scored) + " " + breadth["regime_hint"]
+        context = agents.context_agent(client, summary)
+    else:
+        context = {"regime": breadth["regime"], "note": breadth["regime_hint"]}
 
     cands = sorted((s for s in scored if not s["excluded"]),
                    key=lambda s: s["score"], reverse=True)
@@ -124,45 +172,72 @@ def run() -> str:
     excluded = [{"ticker": s["ticker"], "reason": s["reason"]}
                 for s in scored if s["excluded"]]
 
-    context = agents.context_agent(client, _build_market_summary(scored))
-
     ranked, vetoed = [], []
     for s in shortlist:
-        headlines = news.get_headlines(s["ticker"])
-        recent_closes = list(s["_df"]["Close"].tail(10))
-        nv = agents.news_agent(client, s["ticker"], headlines)
-        rv = agents.risk_agent(client, s["ticker"], recent_closes, headlines)
+        ticker = s["ticker"]
+        wsb_sig = wsb_map.get(ticker)
+        congress_sig = congress_agg.get(ticker)
+        analyst_sig = insights.get_analyst_signal(ticker)
+        insider_sig = insights.get_insider_signal(ticker)
+        earnings_sig = insights.get_earnings(ticker)
+
+        if has_llm:
+            headlines = news.get_headlines(ticker)
+            recent_closes = list(s["_df"]["Close"].tail(10))
+            nv = agents.news_agent(client, ticker, headlines)
+            rv = agents.risk_agent(client, ticker, recent_closes, headlines)
+            # ApeWisdom gives counts, not post text, so we hand the agent a one-line
+            # summary of the buzz; a velocity spike with no news reads as hype.
+            if wsb_sig and (wsb_sig.get("mentions") or 0) >= thr["social_min_mentions"]:
+                chatter = [f"{wsb_sig['mentions']} WSB mentions, "
+                           f"{wsb_sig.get('mentions_change')} change in 24h, rank {wsb_sig.get('rank')}"]
+                sv = agents.social_agent(client, ticker, chatter)
+            else:
+                sv = dict(agents.NEUTRAL_SOCIAL)
+        else:
+            nv, rv = dict(agents.NEUTRAL_NEWS), dict(agents.NEUTRAL_RISK)
+            sv = dict(agents.NEUTRAL_SOCIAL)
+
         adjd = adjudicator.adjudicate(
-            {"ticker": s["ticker"], "score": s["score"]}, nv, rv, context, caps
+            {"ticker": ticker, "score": s["score"]}, nv, rv, context, caps,
+            congress=congress_sig, wsb=wsb_sig, social_view=sv,
+            analyst=analyst_sig, insider=insider_sig, earnings=earnings_sig, thresholds=thr,
         )
         (vetoed if adjd["vetoed"] else ranked).append(adjd)
     ranked.sort(key=lambda r: r["final_score"], reverse=True)
 
     # Optional: annotate held names with the Risk agent (annotates only; never drives exits)
-    for h in holdings:
-        try:
-            df_h = df_by_ticker.get(h["ticker"])
-            recent = list(df_h["Close"].tail(10)) if df_h is not None else []
-            rv = agents.risk_agent(client, h["ticker"], recent, news.get_headlines(h["ticker"]))
-            if rv.get("veto") or rv.get("risk_level") == "high":
-                # IMPORTANT: never set an empty/blank flag — fall back to a clear default
-                h["risk_flag"] = rv.get("reason") or "elevated risk"
-        except Exception:
-            pass   # annotation is best-effort; never break the briefing
+    if has_llm:
+        for h in holdings:
+            try:
+                df_h = df_by_ticker.get(h["ticker"])
+                recent = list(df_h["Close"].tail(10)) if df_h is not None else []
+                rv = agents.risk_agent(client, h["ticker"], recent, news.get_headlines(h["ticker"]))
+                if rv.get("veto") or rv.get("risk_level") == "high":
+                    h["risk_flag"] = rv.get("reason") or "elevated risk"
+            except Exception:
+                pass   # annotation is best-effort; never break the briefing
+
+    rotation_plan = rotation.build_rotation_plan(
+        holdings, ranked, conviction=exit_rules["backtest"]["buy_threshold"], max_adds=MAX_ADDS,
+    )
 
     text = briefing.render_briefing(
         ranked, vetoed, others, excluded, date_str, context["regime"], context["note"],
-        holdings=holdings,
+        holdings=holdings, rotation_plan=rotation_plan, discovery=discovery,
     )
     (reports_dir / f"{date_str}.md").write_text(text, encoding="utf-8")
     print(text)
+    if not has_llm:
+        print("\n[AI agents disabled: no ANTHROPIC_API_KEY — running on deterministic signals only]")
 
     # Optional email
     if all(os.environ.get(k) for k in ("EMAIL_USER", "EMAIL_PASSWORD", "EMAIL_TO")):
         try:
             html_body = briefing.render_briefing_html(
                 ranked, vetoed, others, excluded, date_str,
-                context["regime"], context["note"], holdings=holdings,
+                context["regime"], context["note"],
+                holdings=holdings, rotation_plan=rotation_plan, discovery=discovery,
             )
             briefing.send_email(
                 f"Stock Advisor — {date_str}", text,

@@ -50,6 +50,25 @@ def test_load_adjudicator_returns_floats(tmp_path):
     assert caps == {"catalyst": 15.0, "risk_high": 20.0}
 
 
+def test_load_signals_uses_defaults_when_file_missing(tmp_path):
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    sig = config.load_signals(cfg)
+    assert sig["thresholds"]["social_min_mentions"] == 25
+    assert sig["discovery"]["congress_lookback_days"] == 30
+
+
+def test_load_signals_overrides_from_file(tmp_path):
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    (cfg / "signals.yaml").write_text(
+        "thresholds:\n  social_min_mentions: 50\n", encoding="utf-8")
+    sig = config.load_signals(cfg)
+    assert sig["thresholds"]["social_min_mentions"] == 50      # overridden
+    assert sig["thresholds"]["earnings_window_days"] == 5      # default still present
+    assert sig["discovery"]["top_n"] == 8                      # default section intact
+
+
 def test_load_exit_rules_returns_defaults_and_backtest(tmp_path):
     cfg = tmp_path / "config"
     cfg.mkdir()

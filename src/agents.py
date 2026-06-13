@@ -13,6 +13,11 @@ NEUTRAL_RISK = {
     "reason": "risk agent unavailable (treated as no opinion)",
 }
 NEUTRAL_CONTEXT = {"regime": "neutral", "note": "context agent unavailable"}
+NEUTRAL_SOCIAL = {
+    "credibility": None,        # None = no opinion (neutral in trust scoring)
+    "contrarian": False,
+    "summary": "social agent unavailable",
+}
 
 
 def extract_json(text: str) -> dict:
@@ -71,6 +76,35 @@ def risk_agent(client, ticker: str, recent_closes: list, headlines: list) -> dic
         }
     except Exception:
         return dict(NEUTRAL_RISK)
+
+
+def social_agent(client, ticker: str, post_titles: list) -> dict:
+    """Judge whether r/wallstreetbets buzz is substantive or pure hype.
+
+    Social media is an unreliable source on its own, so this agent grades the *quality*
+    of the chatter (real due-diligence vs meme/pump) and flags when the crowd is likely
+    wrong (contrarian). It feeds trust.social_trust(); it never moves a score directly.
+    """
+    if not post_titles:
+        return {**NEUTRAL_SOCIAL, "summary": "no recent posts"}
+    system = (
+        "You analyze r/wallstreetbets chatter about a stock. Decide whether the buzz is "
+        "substantive (real due diligence, specific numbers/catalysts) or pure hype "
+        "(rocket emojis, no thesis), and whether the crowd is likely wrong (contrarian). "
+        "Respond ONLY with a JSON object with keys: credibility (one of: low, med, high), "
+        "contrarian (true/false), summary (one sentence)."
+    )
+    user = f"Ticker: {ticker}\nTop posts:\n" + "\n".join(f"- {t}" for t in post_titles)
+    try:
+        data = extract_json(client.complete(system, user))
+        cred = data.get("credibility")
+        return {
+            "credibility": cred if cred in ("low", "med", "high") else None,
+            "contrarian": bool(data.get("contrarian", False)),
+            "summary": str(data.get("summary", "")),
+        }
+    except Exception:
+        return dict(NEUTRAL_SOCIAL)
 
 
 def context_agent(client, market_summary: str) -> dict:

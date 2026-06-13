@@ -165,6 +165,90 @@ def test_render_briefing_html_handles_unavailable_price():
     assert "$nan" not in html_out.lower()      # NaN price not formatted as a number
 
 
+def test_render_rotation_section_lists_each_action():
+    plan = {
+        "exits": [{"ticker": "AAPL", "reason": "down 13% from peak"}],
+        "trims": [{"ticker": "NVDA", "reason": "congress selling"}],
+        "adds": [{"ticker": "SMCI", "final_score": 80, "conviction": "high",
+                  "reason": "high-conviction setup"}],
+        "hold": [{"ticker": "T"}],
+    }
+    text = briefing.render_rotation_section(plan)
+    assert "rotation" in text.lower()
+    assert "AAPL" in text and "down 13%" in text       # exit
+    assert "NVDA" in text and "congress selling" in text  # trim
+    assert "SMCI" in text                               # add
+    assert "T" in text                                  # hold
+
+
+def test_render_rotation_section_empty_is_hold_steady():
+    text = briefing.render_rotation_section({"exits": [], "trims": [], "adds": [], "hold": []})
+    assert "hold steady" in text.lower()
+
+
+def test_candidate_insight_lines_show_badges_when_present():
+    r = {
+        "congress": {"net_side": "buy", "n_members": 2, "most_recent_disclosure": "2026-06-10"},
+        "insider": {"net_side": "buy", "n_buys": 3, "n_sells": 0},
+        "analyst": {"rating": "buy", "upside_pct": 15.0},
+        "earnings": {"days_until": 3, "next_earnings": "2026-06-16"},
+        "social": "+8.5 WSB buzz (trust 85%)",
+    }
+    lines = briefing._candidate_insight_lines(r)
+    joined = "\n".join(lines)
+    assert "🏛️" in joined and "buy" in joined            # congress
+    assert "👔" in joined                                 # insider
+    assert "🎯" in joined and "15" in joined              # analyst upside
+    assert "📅" in joined and "3" in joined               # earnings countdown
+    assert "💬" in joined and "WSB" in joined             # social
+
+
+def test_candidate_insight_lines_empty_when_no_signals():
+    assert briefing._candidate_insight_lines({}) == []
+
+
+def test_render_discovery_section_lists_movers():
+    congress_movers = [{"ticker": "BIG", "member": "Hon. Jane Doe", "side": "buy",
+                        "amount_low": 100001, "amount_high": 250000,
+                        "disclosure_date": "2026-06-10"}]
+    wsb_movers = [{"ticker": "ZYX", "mentions": 500, "mentions_change": 400}]
+    text = briefing.render_discovery_section(congress_movers, wsb_movers)
+    assert "Outside the watchlist" in text
+    assert "BIG" in text and "Jane Doe" in text
+    assert "ZYX" in text and "400" in text
+
+
+def test_render_discovery_section_empty_returns_blank():
+    assert briefing.render_discovery_section([], []) == ""
+
+
+def test_render_briefing_includes_rotation_and_discovery():
+    ranked = [_adjudicated("HI", 88, 80, "deal", "low", "fine", [])]
+    plan = {"exits": [], "trims": [], "adds": [{"ticker": "SMCI", "final_score": 80,
+            "conviction": "high", "reason": "setup"}], "hold": []}
+    discovery = {"congress": [{"ticker": "BIG", "member": "Hon. X", "side": "buy",
+                 "amount_low": 100001, "amount_high": 250000, "disclosure_date": "2026-06-10"}],
+                 "wsb": [{"ticker": "ZYX", "mentions": 500, "mentions_change": 400}]}
+    text = briefing.render_briefing(ranked, [], [], [], "2026-06-08", "risk_on", "ok",
+                                    holdings=[], rotation_plan=plan, discovery=discovery)
+    assert "SMCI" in text                              # rotation add surfaced
+    assert "BIG" in text                               # discovery surfaced
+    assert text.index("rotation") < text.index("Top candidates") if "rotation" in text.lower() else True
+
+
+def test_render_briefing_html_includes_rotation_and_discovery():
+    ranked = [_adjudicated("HI", 88, 80, "deal", "low", "fine", [])]
+    plan = {"exits": [{"ticker": "AAPL", "reason": "stop hit"}], "trims": [], "adds": [], "hold": []}
+    discovery = {"congress": [{"ticker": "BIG", "member": "Hon. X", "side": "buy",
+                 "amount_low": 100001, "amount_high": 250000, "disclosure_date": "2026-06-10"}],
+                 "wsb": []}
+    html_out = briefing.render_briefing_html(ranked, [], [], [], "2026-06-08", "risk_on", "ok",
+                                             holdings=[], rotation_plan=plan, discovery=discovery)
+    assert "AAPL" in html_out                          # rotation exit
+    assert "BIG" in html_out                           # discovery
+    assert "Outside the watchlist" in html_out
+
+
 def test_render_briefing_html_omits_empty_sections_and_shows_vetoed():
     vetoed = [{"ticker": "GME", "veto_reason": "headline spike"}]
     html_out = briefing.render_briefing_html(

@@ -57,3 +57,31 @@ def test_context_agent_parses_regime():
 def test_context_agent_falls_back_on_error():
     out = agents.context_agent(BoomClient(), "anything")
     assert out["regime"] == "neutral"
+
+
+def test_social_agent_parses_credibility():
+    reply = ('{"credibility": "high", "contrarian": false, '
+             '"summary": "Detailed DD thread with real numbers."}')
+    out = agents.social_agent(FakeClient(reply), "GME", ["GME DD: undervalued"])
+    assert out["credibility"] == "high"
+    assert out["contrarian"] is False
+
+
+def test_social_agent_flags_contrarian_hype():
+    reply = ('{"credibility": "low", "contrarian": true, '
+             '"summary": "Pure rocket-emoji hype, no substance."}')
+    out = agents.social_agent(FakeClient(reply), "AMC", ["AMC TO THE MOON 🚀🚀"])
+    assert out["credibility"] == "low"
+    assert out["contrarian"] is True
+
+
+def test_social_agent_no_posts_is_neutral():
+    out = agents.social_agent(FakeClient("{}"), "AAPL", [])
+    assert out["credibility"] is None
+    assert out["contrarian"] is False
+
+
+def test_social_agent_falls_back_on_error():
+    out = agents.social_agent(BoomClient(), "AAPL", ["something"])
+    assert out["credibility"] is None
+    assert out["contrarian"] is False

@@ -4,3 +4,10 @@ caps:
   risk_high: 20       # -points when Risk agent says risk is high
   risk_medium: 8      # -points when Risk agent says risk is medium
   regime: 5           # +/- global points from the Context agent's market regime
+  congress_buy: 18    # +points on net congressional buying (weighted heavily)
+  congress_sell: 18   # -points on net congressional selling
+  insider_buy: 12     # +points on net corporate insider (Form 4) buying
+  insider_sell: 10    # -points on net insider selling
+  analyst: 8          # +/- points from analyst consensus / price-target upside
+  earnings_soon: 6    # -points for a new entry with earnings inside the window
+  social: 10          # MAX social impact; actually applied = social * trust(0..1)

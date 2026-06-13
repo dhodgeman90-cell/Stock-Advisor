@@ -41,6 +41,39 @@ def load_adjudicator(config_dir=CONFIG_DIR) -> dict:
     return {k: float(v) for k, v in caps.items()}
 
 
+SIGNAL_DEFAULTS = {
+    "thresholds": {
+        "congress_large_usd": 50000,   # disclosure size that counts as a "big" trade
+        "social_min_mentions": 25,     # WSB mentions below which buzz is ignored
+        "earnings_window_days": 5,     # demote new entries with earnings within N days
+    },
+    "discovery": {
+        "congress_lookback_days": 30,  # how recent a disclosure must be to surface
+        "top_n": 8,                    # max rows in the "outside the watchlist" feed
+    },
+}
+
+
+def load_signals(config_dir=CONFIG_DIR) -> dict:
+    """Load tunables for the new signal sources, merged over built-in defaults.
+
+    A missing signals.yaml (or any missing key) falls back to SIGNAL_DEFAULTS so the
+    briefing always has sane thresholds without requiring the file to exist.
+    """
+    merged = {section: dict(vals) for section, vals in SIGNAL_DEFAULTS.items()}
+    path = Path(config_dir) / "signals.yaml"
+    if not path.exists():
+        return merged
+    with open(path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    for section, vals in data.items():
+        if isinstance(vals, dict):
+            merged.setdefault(section, {}).update(vals)
+        else:
+            merged[section] = vals
+    return merged
+
+
 def load_exit_rules(config_dir=CONFIG_DIR) -> dict:
     data = _load("exits.yaml", config_dir)
     defaults = data.get("defaults")
