@@ -1,1 +1,143 @@
-// stub — replaced in Task 8
+const $ = (sel) => document.querySelector(sel);
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+  if (!res.ok) throw new Error(`${path} -> ${res.status}`);
+  return res.json();
+}
+
+// ---- navigation ----
+function showScreen(name) {
+  document.querySelectorAll(".screen").forEach((s) => s.classList.add("hidden"));
+  $(`#screen-${name}`).classList.remove("hidden");
+  document.querySelectorAll(".nav-btn").forEach((b) =>
+    b.classList.toggle("active", b.dataset.screen === name));
+  if (name === "watchlist") loadSettings();
+  if (name === "positions") loadPositions();
+}
+document.querySelectorAll(".nav-btn").forEach((b) =>
+  b.addEventListener("click", () => showScreen(b.dataset.screen)));
+
+// ---- briefing ----
+async function loadBriefing(autoRun = true) {
+  const data = await api("/api/briefing/today");
+  if (data.status === "none") {
+    if (autoRun) { await runBriefing(); return; }
+    $("#briefing-status").textContent = "No briefing yet. Click “Run now”.";
+    return;
+  }
+  $("#briefing-status").textContent = "";
+  $("#briefing-content").innerHTML = data.html;   // our own server-rendered HTML
+}
+
+async function runBriefing() {
+  $("#run-btn").disabled = true;
+  $("#briefing-status").textContent = "Running… fetching market data (this can take ~30s).";
+  try {
+    const r = await api("/api/run", { method: "POST" });
+    if (r.status === "ok") { await loadBriefing(false); }
+    else if (r.status === "skipped") { $("#briefing-status").textContent = r.message; }
+    else { $("#briefing-status").textContent = "Run failed: " + (r.message || "unknown error"); }
+  } catch (e) {
+    $("#briefing-status").textContent = "Run failed: " + e.message;
+  } finally {
+    $("#run-btn").disabled = false;
+  }
+}
+$("#run-btn").addEventListener("click", runBriefing);
+
+// ---- watchlist / settings ----
+let tickers = [];
+let loadedSettings = {};   // full settings from GET, so PUT can preserve UI-hidden keys
+function renderChips() {
+  $("#ticker-chips").innerHTML = tickers.map((t, i) =>
+    `<span class="chip">${esc(t)}<button data-i="${i}" class="chip-x">×</button></span>`).join("");
+  document.querySelectorAll(".chip-x").forEach((b) =>
+    b.addEventListener("click", () => { tickers.splice(+b.dataset.i, 1); renderChips(); }));
+}
+async function loadSettings() {
+  const data = await api("/api/settings");
+  tickers = data.tickers.slice();
+  loadedSettings = data.settings || {};
+  renderChips();
+  $("#shortlist-size").value = loadedSettings.shortlist_size ?? 8;
+  $("#lookback-days").value = loadedSettings.lookback_days ?? 200;
+  $("#settings-msg").textContent = "";
+}
+$("#add-ticker-btn").addEventListener("click", () => {
+  const v = $("#new-ticker").value.trim().toUpperCase();
+  if (v && !tickers.includes(v)) { tickers.push(v); renderChips(); }
+  $("#new-ticker").value = "";
+});
+$("#save-settings-btn").addEventListener("click", async () => {
+  const body = {
+    tickers,
+    settings: {
+      ...loadedSettings,   // preserve fields the UI doesn't expose (min_price, min_avg_volume)
+      shortlist_size: +$("#shortlist-size").value || 8,
+      lookback_days: +$("#lookback-days").value || 200,
+    },
+  };
+  try {
+    await api("/api/settings", { method: "PUT", body: JSON.stringify(body) });
+    $("#settings-msg").textContent = "Saved.";
+  } catch (e) { $("#settings-msg").textContent = "Save failed: " + e.message; }
+});
+
+// ---- positions ----
+function positionRow(p = {}) {
+  const tr = document.createElement("tr");
+  tr.innerHTML =
+    `<td><input class="p-ticker" value="${esc(p.ticker || "")}" maxlength="8"></td>` +
+    `<td><input class="p-price" type="number" step="0.01" value="${p.entry_price ?? ""}"></td>` +
+    `<td><input class="p-date" type="date" value="${esc(p.entry_date || "")}"></td>` +
+    `<td><input class="p-shares" type="number" step="any" value="${p.shares ?? ""}"></td>` +
+    `<td><button class="p-del">×</button></td>`;
+  tr.querySelector(".p-del").addEventListener("click", () => tr.remove());
+  return tr;
+}
+async function loadPositions() {
+  const data = await api("/api/positions");
+  const body = $("#positions-body");
+  body.innerHTML = "";
+  data.positions.forEach((p) => body.appendChild(positionRow(p)));
+  $("#positions-msg").textContent = "";
+}
+$("#add-position-btn").addEventListener("click", () =>
+  $("#positions-body").appendChild(positionRow()));
+$("#save-positions-btn").addEventListener("click", async () => {
+  const positions = [];
+  for (const tr of document.querySelectorAll("#positions-body tr")) {
+    const ticker = tr.querySelector(".p-ticker").value.trim().toUpperCase();
+    const price = parseFloat(tr.querySelector(".p-price").value);
+    if (!ticker || !(price > 0)) continue;
+    const date = tr.querySelector(".p-date").value.trim();
+    const shares = tr.querySelector(".p-shares").value.trim();
+    const p = { ticker, entry_price: price };
+    if (date) p.entry_date = date;
+    if (shares) p.shares = parseFloat(shares);
+    positions.push(p);
+  }
+  try {
+    await api("/api/positions", { method: "PUT", body: JSON.stringify({ positions }) });
+    $("#positions-msg").textContent = "Saved.";
+  } catch (e) { $("#positions-msg").textContent = "Save failed: " + e.message; }
+});
+
+// ---- boot ----
+async function boot() {
+  const state = await api("/api/state");
+  if (!state.disclaimer_accepted) {
+    $("#disclaimer").classList.remove("hidden");
+    $("#accept-btn").addEventListener("click", async () => {
+      await api("/api/disclaimer/accept", { method: "POST" });
+      $("#disclaimer").classList.add("hidden");
+      loadBriefing();
+    });
+  } else {
+    loadBriefing();
+  }
+}
+boot();

@@ -1,5 +1,81 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><title>Stock Advisor</title></head>
-<body><p>Stock Advisor — UI stub (replaced in Task 8).</p></body>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stock Advisor</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="disclaimer" class="modal hidden">
+  <div class="modal-card">
+    <h2>Welcome to Stock Advisor</h2>
+    <p>This app provides <b>information, not financial advice</b>. It summarizes public
+    market data and rules-based signals to help you do your own research. You are
+    responsible for your own investment decisions.</p>
+    <button id="accept-btn">I understand &mdash; continue</button>
+  </div>
+</div>
+
+<header>
+  <div class="brand">Stock Advisor</div>
+  <nav>
+    <button class="nav-btn active" data-screen="briefing">Briefing</button>
+    <button class="nav-btn" data-screen="watchlist">Watchlist</button>
+    <button class="nav-btn" data-screen="positions">Positions</button>
+    <button class="nav-btn" data-screen="integrations">Integrations</button>
+  </nav>
+</header>
+
+<main>
+  <section id="screen-briefing" class="screen">
+    <div class="row">
+      <h1>Today's briefing</h1>
+      <button id="run-btn">Run now</button>
+    </div>
+    <div id="briefing-status" class="status"></div>
+    <div id="briefing-content"></div>
+  </section>
+
+  <section id="screen-watchlist" class="screen hidden">
+    <h1>Watchlist</h1>
+    <div id="ticker-chips" class="chips"></div>
+    <div class="row">
+      <input id="new-ticker" placeholder="Add ticker (e.g. AAPL)" maxlength="8">
+      <button id="add-ticker-btn">Add</button>
+    </div>
+    <div class="field"><label>Shortlist size
+      <input id="shortlist-size" type="number" min="1" max="50"></label></div>
+    <div class="field"><label>Lookback days
+      <input id="lookback-days" type="number" min="30" max="800"></label></div>
+    <button id="save-settings-btn">Save watchlist</button>
+    <span id="settings-msg" class="msg"></span>
+  </section>
+
+  <section id="screen-positions" class="screen hidden">
+    <h1>Positions</h1>
+    <table id="positions-table">
+      <thead><tr>
+        <th>Ticker</th><th>Entry price</th><th>Entry date</th><th>Shares</th><th></th>
+      </tr></thead>
+      <tbody id="positions-body"></tbody>
+    </table>
+    <button id="add-position-btn">Add row</button>
+    <button id="save-positions-btn">Save positions</button>
+    <span id="positions-msg" class="msg"></span>
+  </section>
+
+  <section id="screen-integrations" class="screen hidden">
+    <h1>Integrations</h1>
+    <p class="muted">Optional power features &mdash; coming in a later update.</p>
+    <ul class="muted">
+      <li><b>AI analysis</b> (bring your own Anthropic key)</li>
+      <li><b>Email briefing</b> (bring your own Gmail app password)</li>
+    </ul>
+    <p class="muted">The app runs fully on rules-based signals without any of these.</p>
+  </section>
+</main>
+
+<script src="/app.js"></script>
+</body>
 </html>
