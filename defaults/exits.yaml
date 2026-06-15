@@ -1,0 +1,17 @@
+defaults:
+  stop_loss_pct: 8
+  take_profit_pct: 20
+  take_profit_mode: trailing
+  trailing_stop_pct: 12
+  trend_break_fast: 20
+  trend_break_slow: 50
+  trend_break_slow_level: watch
+  momentum_fade:
+    rsi_was_above: 70
+    volume_dry_ratio: 0.7
+backtest:
+  buy_threshold: 65
+  max_hold_days: 250
+  window_years: 2
+  cost_pct_per_side: 0.1
+  baseline: equal_weight_watchlist

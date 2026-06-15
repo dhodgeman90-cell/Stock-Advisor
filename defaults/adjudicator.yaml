@@ -1,0 +1,13 @@
+caps:
+  catalyst: 15
+  news_negative: 10
+  risk_high: 20
+  risk_medium: 8
+  regime: 5
+  congress_buy: 18
+  congress_sell: 18
+  insider_buy: 12
+  insider_sell: 10
+  analyst: 8
+  earnings_soon: 6
+  social: 10

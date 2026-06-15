@@ -1,0 +1,16 @@
+tickers:
+  - AAPL
+  - NVDA
+  - AMD
+  - MSFT
+  - TSLA
+  - AMZN
+  - META
+  - GOOGL
+  - NFLX
+  - AVGO
+settings:
+  shortlist_size: 8
+  lookback_days: 200
+  min_price: 5.0
+  min_avg_volume: 500000
