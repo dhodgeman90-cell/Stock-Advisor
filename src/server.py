@@ -16,4 +16,7 @@ def create_app(profile: Profile) -> FastAPI:
     from src import routes_core
     routes_core.register(app)
 
+    from src import routes_settings
+    routes_settings.register(app)
+
     return app
