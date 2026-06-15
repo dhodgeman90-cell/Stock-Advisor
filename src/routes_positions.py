@@ -31,6 +31,9 @@ def register(app) -> None:
 
     @app.put("/api/positions")
     def put_positions(body: PositionsBody, profile=Depends(get_profile)):
+        # Full replace: positions omitted from the body are removed, and optional
+        # per-ticker fields left blank (entry_date, shares, *_pct exit overrides) are
+        # dropped. The UI submits the complete positions table on each save.
         try:
             config.save_positions(profile.config_dir,
                                   [p.model_dump() for p in body.positions])
