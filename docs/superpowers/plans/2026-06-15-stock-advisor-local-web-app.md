@@ -1332,6 +1332,7 @@ $("#run-btn").addEventListener("click", runBriefing);
 
 // ---- watchlist / settings ----
 let tickers = [];
+let loadedSettings = {};   // full settings from GET, so PUT can preserve UI-hidden keys
 function renderChips() {
   $("#ticker-chips").innerHTML = tickers.map((t, i) =>
     `<span class="chip">${esc(t)}<button data-i="${i}" class="chip-x">×</button></span>`).join("");
@@ -1341,9 +1342,10 @@ function renderChips() {
 async function loadSettings() {
   const data = await api("/api/settings");
   tickers = data.tickers.slice();
+  loadedSettings = data.settings || {};
   renderChips();
-  $("#shortlist-size").value = data.settings.shortlist_size ?? 8;
-  $("#lookback-days").value = data.settings.lookback_days ?? 200;
+  $("#shortlist-size").value = loadedSettings.shortlist_size ?? 8;
+  $("#lookback-days").value = loadedSettings.lookback_days ?? 200;
   $("#settings-msg").textContent = "";
 }
 $("#add-ticker-btn").addEventListener("click", () => {
@@ -1355,6 +1357,7 @@ $("#save-settings-btn").addEventListener("click", async () => {
   const body = {
     tickers,
     settings: {
+      ...loadedSettings,   // preserve fields the UI doesn't expose (min_price, min_avg_volume)
       shortlist_size: +$("#shortlist-size").value || 8,
       lookback_days: +$("#lookback-days").value || 200,
     },
