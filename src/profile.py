@@ -8,8 +8,11 @@ the same engine can serve a packaged per-user install whose data lives in, e.g.,
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
+ROOT = Path(__file__).resolve().parent.parent
 
 
 class EnvSecrets:
@@ -53,3 +56,36 @@ class EnvSecrets:
         for key, val in self._values.items():
             if val != "":
                 os.environ.setdefault(key, val)
+
+
+@dataclass(frozen=True)
+class Profile:
+    config_dir: Path
+    data_dir: Path
+    reports_dir: Path
+    secrets: EnvSecrets
+
+    @classmethod
+    def for_repo(cls) -> "Profile":
+        """Owner's personal profile: repo-relative dirs + repo .env (back-compat)."""
+        return cls(
+            config_dir=ROOT / "config",
+            data_dir=ROOT / "data",
+            reports_dir=ROOT / "reports",
+            secrets=EnvSecrets(dotenv_path=ROOT / ".env"),
+        )
+
+    @classmethod
+    def for_base(cls, base) -> "Profile":
+        """Per-user profile rooted at an arbitrary base dir (e.g. %APPDATA%/StockAdvisor)."""
+        base = Path(base)
+        return cls(
+            config_dir=base / "config",
+            data_dir=base / "data",
+            reports_dir=base / "reports",
+            secrets=EnvSecrets(dotenv_path=base / ".env"),
+        )
+
+    def ensure_dirs(self) -> None:
+        for d in (self.config_dir, self.data_dir, self.reports_dir):
+            d.mkdir(parents=True, exist_ok=True)

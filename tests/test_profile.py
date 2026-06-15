@@ -44,3 +44,30 @@ def test_apply_to_environ_does_not_clobber_existing(tmp_path, monkeypatch):
     import os
     assert os.environ["KEEP"] == "already"   # setdefault semantics, matches load_dotenv
     assert os.environ["ADD"] == "added"
+
+
+from src.profile import Profile, ROOT
+
+
+def test_profile_for_repo_uses_repo_dirs():
+    p = Profile.for_repo()
+    assert p.config_dir == ROOT / "config"
+    assert p.data_dir == ROOT / "data"
+    assert p.reports_dir == ROOT / "reports"
+    assert p.secrets.get("definitely-not-a-real-key") is None
+
+
+def test_profile_for_base_roots_all_dirs(tmp_path):
+    p = Profile.for_base(tmp_path)
+    assert p.config_dir == tmp_path / "config"
+    assert p.data_dir == tmp_path / "data"
+    assert p.reports_dir == tmp_path / "reports"
+
+
+def test_profile_ensure_dirs_creates_them(tmp_path):
+    p = Profile.for_base(tmp_path / "app")
+    assert not p.config_dir.exists()
+    p.ensure_dirs()
+    assert p.config_dir.is_dir()
+    assert p.data_dir.is_dir()
+    assert p.reports_dir.is_dir()
