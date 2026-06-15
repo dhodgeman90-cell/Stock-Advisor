@@ -71,3 +71,26 @@ def test_profile_ensure_dirs_creates_them(tmp_path):
     assert p.config_dir.is_dir()
     assert p.data_dir.is_dir()
     assert p.reports_dir.is_dir()
+
+
+# ---- robust .env parsing (delegates to python-dotenv, already a dependency) ----
+
+def test_envsecrets_strips_inline_comment(tmp_path):
+    # A commented value must not leak the comment into the value — otherwise
+    # int(EMAIL_PORT) downstream would crash on "465  # gmail SSL".
+    (tmp_path / ".env").write_text("EMAIL_PORT=465  # gmail SSL\n", encoding="utf-8")
+    s = EnvSecrets(dotenv_path=tmp_path / ".env")
+    assert s.get("EMAIL_PORT") == "465"
+
+
+def test_envsecrets_handles_export_prefix(tmp_path):
+    (tmp_path / ".env").write_text("export FOO=bar\n", encoding="utf-8")
+    s = EnvSecrets(dotenv_path=tmp_path / ".env")
+    assert s.get("FOO") == "bar"
+
+
+def test_envsecrets_preserves_literal_dollar_sign(tmp_path):
+    # Secrets are opaque: a literal $ must never be expanded as a ${VAR} reference.
+    (tmp_path / ".env").write_text("SECRET=ab$cd\n", encoding="utf-8")
+    s = EnvSecrets(dotenv_path=tmp_path / ".env")
+    assert s.get("SECRET") == "ab$cd"

@@ -35,16 +35,17 @@ class EnvSecrets:
 
     @staticmethod
     def _read_dotenv(path: Optional[Path]) -> dict:
+        # Delegate to python-dotenv (already a required dependency, also used by
+        # link_broker.py) for robust parsing: it correctly handles `export ` prefixes,
+        # inline `# comments`, and quoting that a hand-rolled splitter gets wrong.
+        # interpolate=False keeps secrets literal — a value containing `$` is never
+        # expanded as a ${VAR} reference. None values (bare `KEY` with no `=`) are
+        # dropped so only real values are stored.
         if not path or not path.exists():
             return {}
-        out = {}
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, val = line.partition("=")
-            out[key.strip()] = val.strip().strip('"').strip("'")
-        return out
+        from dotenv import dotenv_values
+        return {k: v for k, v in dotenv_values(path, interpolate=False, encoding="utf-8").items()
+                if v is not None}
 
     def get(self, key: str, default=None):
         val = self._values.get(key)
