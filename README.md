@@ -3,6 +3,13 @@
 Local, free tool that scans a watchlist and prints/emails a ranked list of
 short-term momentum buy candidates. **Suggests only — never trades.**
 
+> **Profile-aware engine:** `main.run()` accepts a `Profile` (config/data/reports
+> dirs + secret source). With no argument it uses `Profile.for_repo()` — the owner's
+> repo files and `.env` — so `python -m src.main` is unchanged. A packaged per-user
+> build passes `Profile.for_base(<%APPDATA%/StockAdvisor>)` instead, keeping each
+> person's data isolated from the program files. See
+> `docs/superpowers/specs/2026-06-15-stock-advisor-distribution-design.md`.
+
 See the design spec in `docs/superpowers/specs/` for the full picture.
 
 ## Phase 1 (this build): deterministic core
