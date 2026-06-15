@@ -6,3 +6,6 @@ pytest>=8.0
 anthropic>=0.40
 python-dotenv>=1.0
 snaptrade-python-sdk>=11.0
+fastapi>=0.110
+uvicorn>=0.30
+httpx>=0.27          # required by fastapi.testclient.TestClient (tests)

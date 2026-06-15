@@ -12,6 +12,24 @@ short-term momentum buy candidates. **Suggests only — never trades.**
 
 See the design spec in `docs/superpowers/specs/` for the full picture.
 
+## Run the local app (browser dashboard)
+
+The same engine that powers the owner CLI also runs as a small local web app — a
+FastAPI server bound to `127.0.0.1` (never network-exposed) plus a plain-HTML
+dashboard. Each user's data lives in their own profile dir, **not** in the repo:
+`%APPDATA%\StockAdvisor` on Windows (override with the `STOCK_ADVISOR_HOME` env var).
+
+```powershell
+& .\.venv\Scripts\Activate.ps1
+python -m src.app
+```
+
+This seeds a fresh profile from `defaults/` on first run, starts the server on the
+first free port at/after 8765, and opens your browser. Screens: **Briefing** (view /
+run today's briefing), **Watchlist** (edit tickers + shortlist/lookback), **Positions**
+(manual holdings), **Integrations** (optional power features — coming later).
+Rules-only by default: no API keys, no cost.
+
 ## Phase 1 (this build): deterministic core
 
 ### Setup (one time)
