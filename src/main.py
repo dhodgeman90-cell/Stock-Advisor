@@ -6,6 +6,8 @@ import pandas as pd
 
 from src import (config, data, scoring, news, agents, adjudicator, briefing,
                  exits, broker, social, congress, insights, market, rotation)
+from src.profile import Profile
+from src.results import RunResult
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -72,47 +74,47 @@ def _discovery_feed(congress_trades, wsb_map, known_tickers, signals_cfg, today=
     return {"congress": congress_movers, "wsb": wsb_movers}
 
 
-def run(force: bool = False) -> str:
-    # Make console output crash-proof: the briefing contains emojis that the
-    # legacy Windows console (cp1252) cannot encode. UTF-8 + replace avoids a
-    # UnicodeEncodeError without affecting the UTF-8 file that's saved.
+def run(profile: Profile | None = None, force: bool = False, *, fetch=None) -> RunResult:
+    # Make console output crash-proof: the briefing contains emojis that the legacy
+    # Windows console (cp1252) cannot encode. UTF-8 + replace avoids a crash without
+    # affecting the UTF-8 file that's saved.
     import sys
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
 
-    # The market is closed on weekends and holidays, so a briefing then is just
-    # wasted API tokens and an email the owner can't act on. Bail out before any
-    # work. Run anyway with `python -m src.main --force` to test on a closed day.
+    if profile is None:
+        profile = Profile.for_repo()
+    profile.ensure_dirs()
+    secrets = profile.secrets
+    secrets.apply_to_environ()          # legacy modules (broker/llm/congress) read os.environ
+    if fetch is None:
+        fetch = data.fetch_history
+
+    date_str = dt.date.today().isoformat()
+
+    # Market closed on weekends/holidays -> no actionable briefing. `--force` overrides.
     if _should_skip_today(dt.date.today(), force):
         msg = "Market closed today (weekend/holiday); skipping briefing (use --force to override)."
         print(msg)
-        return msg
+        return RunResult(date=date_str, text=msg, skipped=True)
 
-    try:
-        from dotenv import load_dotenv
-        load_dotenv(ROOT / ".env")
-    except Exception:
-        pass
-
-    wl = config.load_watchlist()
-    weights = config.load_weights()
-    caps = config.load_adjudicator()
-    signals_cfg = config.load_signals()
+    wl = config.load_watchlist(profile.config_dir)
+    weights = config.load_weights(profile.config_dir)
+    caps = config.load_adjudicator(profile.config_dir)
+    signals_cfg = config.load_signals(profile.config_dir)
     thr = signals_cfg["thresholds"]
     settings = wl["settings"]
     lookback = settings.get("lookback_days", 200)
     shortlist_size = settings.get("shortlist_size", 8)
 
-    data_dir = ROOT / "data"
-    reports_dir = ROOT / "reports"
-    reports_dir.mkdir(parents=True, exist_ok=True)
-    date_str = dt.date.today().isoformat()
+    data_dir = profile.data_dir
+    reports_dir = profile.reports_dir
 
     scored = []
     for ticker in wl["tickers"]:
-        df = data.fetch_history(ticker, lookback)
+        df = fetch(ticker, lookback)
         ok, reason = data.validate(df, ticker)
         if ok:
             data.save_cache(df, ticker, data_dir)
@@ -127,11 +129,13 @@ def run(force: bool = False) -> str:
         result["_df"] = df if not result["excluded"] else None
         scored.append(result)
 
-    # ---- Phase 3: evaluate exit signals on current holdings ----
+    # ---- evaluate exit signals on current holdings ----
     positions = broker.resolve_positions(
-        on_error=lambda e: print(f"[holdings: SnapTrade sync failed, using positions.yaml: {e}]")
+        load_positions=lambda: config.load_positions(profile.config_dir),
+        load_overrides=lambda: config.load_position_overrides(profile.config_dir),
+        on_error=lambda e: print(f"[holdings: SnapTrade sync failed, using positions.yaml: {e}]"),
     )
-    exit_rules = config.load_exit_rules()
+    exit_rules = config.load_exit_rules(profile.config_dir)
     df_by_ticker = {s["ticker"]: s.get("_df") for s in scored if s.get("_df") is not None}
 
     holdings = []
@@ -139,7 +143,7 @@ def run(force: bool = False) -> str:
         df = df_by_ticker.get(pos["ticker"])
         ok = df is not None
         if df is None:
-            df = data.fetch_history(pos["ticker"], lookback)
+            df = fetch(pos["ticker"], lookback)
             ok, _ = data.validate(df, pos["ticker"])
             if ok:
                 data.save_cache(df, pos["ticker"], data_dir)
@@ -164,13 +168,12 @@ def run(force: bool = False) -> str:
             peak = float(pos["entry_price"])
         holdings.append(exits.evaluate_exit(df, {**pos, "peak_price": peak}, exit_rules))
 
-    # ---- New signal sources: fetch the market-wide feeds once (all fall back gracefully) ----
+    # ---- market-wide feeds (each falls back gracefully) ----
     wsb_map = social.get_wsb_sentiment()
     congress_trades = congress.get_congress_trades()
     congress_agg = congress.aggregate_by_ticker(congress_trades)
     breadth = market.get_market_breadth()
 
-    # Attach smart-money signals to holdings so the rotation can spot insiders/congress leaving.
     for h in holdings:
         h["congress"] = congress_agg.get(h["ticker"])
         h["insider"] = insights.get_insider_signal(h["ticker"])
@@ -178,14 +181,12 @@ def run(force: bool = False) -> str:
     known = set(wl["tickers"]) | {h["ticker"] for h in holdings}
     discovery = _discovery_feed(congress_trades, wsb_map, known, signals_cfg)
 
-    has_llm = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    has_llm = bool(secrets.get("ANTHROPIC_API_KEY"))
     client = None
     if has_llm:
         from src import llm
         client = llm.AnthropicClient()
 
-    # Market regime: the LLM strategist when available, otherwise the deterministic
-    # VIX/breadth read so the free-tier brief still gets a real regime call.
     if has_llm:
         summary = _build_market_summary(scored) + " " + breadth["regime_hint"]
         context = agents.context_agent(client, summary)
@@ -213,8 +214,6 @@ def run(force: bool = False) -> str:
             recent_closes = list(s["_df"]["Close"].tail(10))
             nv = agents.news_agent(client, ticker, headlines)
             rv = agents.risk_agent(client, ticker, recent_closes, headlines)
-            # ApeWisdom gives counts, not post text, so we hand the agent a one-line
-            # summary of the buzz; a velocity spike with no news reads as hype.
             if wsb_sig and (wsb_sig.get("mentions") or 0) >= thr["social_min_mentions"]:
                 chatter = [f"{wsb_sig['mentions']} WSB mentions, "
                            f"{wsb_sig.get('mentions_change')} change in 24h, rank {wsb_sig.get('rank')}"]
@@ -233,7 +232,6 @@ def run(force: bool = False) -> str:
         (vetoed if adjd["vetoed"] else ranked).append(adjd)
     ranked.sort(key=lambda r: r["final_score"], reverse=True)
 
-    # Optional: annotate held names with the Risk agent (annotates only; never drives exits)
     if has_llm:
         for h in holdings:
             try:
@@ -243,7 +241,7 @@ def run(force: bool = False) -> str:
                 if rv.get("veto") or rv.get("risk_level") == "high":
                     h["risk_flag"] = rv.get("reason") or "elevated risk"
             except Exception:
-                pass   # annotation is best-effort; never break the briefing
+                pass
 
     rotation_plan = rotation.build_rotation_plan(
         holdings, ranked, conviction=exit_rules["backtest"]["buy_threshold"], max_adds=MAX_ADDS,
@@ -253,33 +251,39 @@ def run(force: bool = False) -> str:
         ranked, vetoed, others, excluded, date_str, context["regime"], context["note"],
         holdings=holdings, rotation_plan=rotation_plan, discovery=discovery,
     )
-    (reports_dir / f"{date_str}.md").write_text(text, encoding="utf-8")
+    html = briefing.render_briefing_html(
+        ranked, vetoed, others, excluded, date_str, context["regime"], context["note"],
+        holdings=holdings, rotation_plan=rotation_plan, discovery=discovery,
+    )
+    report_path = reports_dir / f"{date_str}.md"
+    report_path.write_text(text, encoding="utf-8")
     print(text)
     if not has_llm:
         print("\n[AI agents disabled: no ANTHROPIC_API_KEY — running on deterministic signals only]")
 
-    # Optional email
-    if all(os.environ.get(k) for k in ("EMAIL_USER", "EMAIL_PASSWORD", "EMAIL_TO")):
+    # Optional email (only when all EMAIL_* secrets are present)
+    if all(secrets.get(k) for k in ("EMAIL_USER", "EMAIL_PASSWORD", "EMAIL_TO")):
         try:
-            html_body = briefing.render_briefing_html(
-                ranked, vetoed, others, excluded, date_str,
-                context["regime"], context["note"],
-                holdings=holdings, rotation_plan=rotation_plan, discovery=discovery,
-            )
             briefing.send_email(
                 f"Stock Advisor — {date_str}", text,
-                host=os.environ.get("EMAIL_HOST", "smtp.gmail.com"),
-                port=int(os.environ.get("EMAIL_PORT", "465")),
-                user=os.environ["EMAIL_USER"],
-                password=os.environ["EMAIL_PASSWORD"],
-                to_addr=os.environ["EMAIL_TO"],
-                html_body=html_body,
+                host=secrets.get("EMAIL_HOST", "smtp.gmail.com"),
+                port=int(secrets.get("EMAIL_PORT", "465")),
+                user=secrets.get("EMAIL_USER"),
+                password=secrets.get("EMAIL_PASSWORD"),
+                to_addr=secrets.get("EMAIL_TO"),
+                html_body=html,
             )
             print("[briefing emailed]")
         except Exception as e:
             print(f"[email failed: {e}]")
 
-    return text
+    return RunResult(
+        date=date_str, text=text, html=html,
+        regime=context["regime"], regime_note=context["note"],
+        ranked=ranked, vetoed=vetoed, others=others, excluded=excluded,
+        holdings=holdings, rotation_plan=rotation_plan, discovery=discovery,
+        report_path=report_path, skipped=False,
+    )
 
 
 if __name__ == "__main__":
