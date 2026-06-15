@@ -82,8 +82,8 @@ def test_run_honors_profile_dirs_and_returns_result(tmp_path, monkeypatch):
 
     # Offline: no secrets -> has_llm False -> no Anthropic calls. Stub the network
     # feeds (all of which return empties on failure in production anyway).
-    monkeypatch.setattr(main.social, "get_wsb_sentiment", lambda: {})
-    monkeypatch.setattr(main.congress, "get_congress_trades", lambda: [])
+    monkeypatch.setattr(main.social, "get_wsb_sentiment", lambda **kw: {})
+    monkeypatch.setattr(main.congress, "get_congress_trades", lambda **kw: [])
     monkeypatch.setattr(main.congress, "aggregate_by_ticker", lambda trades: {})
     monkeypatch.setattr(main.market, "get_market_breadth",
                         lambda: {"regime": "neutral", "regime_hint": "VIX calm"})
@@ -111,3 +111,43 @@ def test_run_honors_profile_dirs_and_returns_result(tmp_path, monkeypatch):
     assert result.report_path == report
     assert result.html != ""                       # structured html captured
     assert isinstance(result.ranked, list)
+
+
+def test_run_routes_signal_caches_to_profile_data_dir(tmp_path, monkeypatch):
+    """main.run must thread profile.data_dir into the WSB + congress cache paths so a
+    per-user install never writes signal caches into the repo/install dir (data isolation)."""
+    from src import main
+    _seed_min_config(tmp_path / "config")
+
+    captured = {}
+
+    def fake_wsb(cache_path=None, **kw):
+        captured["wsb"] = cache_path
+        return {}
+
+    def fake_congress(cache_path=None, **kw):
+        captured["congress"] = cache_path
+        return []
+
+    monkeypatch.setattr(main.social, "get_wsb_sentiment", fake_wsb)
+    monkeypatch.setattr(main.congress, "get_congress_trades", fake_congress)
+    monkeypatch.setattr(main.congress, "aggregate_by_ticker", lambda trades: {})
+    monkeypatch.setattr(main.market, "get_market_breadth",
+                        lambda: {"regime": "neutral", "regime_hint": "VIX calm"})
+    monkeypatch.setattr(main.insights, "get_insider_signal", lambda t: None)
+    monkeypatch.setattr(main.insights, "get_analyst_signal", lambda t: None)
+    monkeypatch.setattr(main.insights, "get_earnings", lambda t: None)
+    monkeypatch.setattr(main.news, "get_headlines", lambda t: [])
+
+    fake_fetch = lambda ticker, lookback: helpers.make_df([10 + i * 0.1 for i in range(160)])
+    profile = Profile(
+        config_dir=tmp_path / "config",
+        data_dir=tmp_path / "data",
+        reports_dir=tmp_path / "reports",
+        secrets=EnvSecrets(values={}),
+    )
+
+    main.run(profile=profile, force=True, fetch=fake_fetch)
+
+    assert captured["wsb"] == profile.data_dir / "wsb_sentiment.json"
+    assert captured["congress"] == profile.data_dir / "congress_trades.json"

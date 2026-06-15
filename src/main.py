@@ -169,8 +169,8 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None) -> R
         holdings.append(exits.evaluate_exit(df, {**pos, "peak_price": peak}, exit_rules))
 
     # ---- market-wide feeds (each falls back gracefully) ----
-    wsb_map = social.get_wsb_sentiment()
-    congress_trades = congress.get_congress_trades()
+    wsb_map = social.get_wsb_sentiment(cache_path=profile.data_dir / "wsb_sentiment.json")
+    congress_trades = congress.get_congress_trades(cache_path=profile.data_dir / "congress_trades.json")
     congress_agg = congress.aggregate_by_ticker(congress_trades)
     breadth = market.get_market_breadth()
 
