@@ -172,7 +172,9 @@ def _atomic_write_yaml(path, data) -> None:
 
 def save_watchlist(config_dir, tickers, settings=None) -> None:
     """Persist watchlist.yaml. Tickers are upper-cased and de-duplicated (order kept).
-    Mirrors what load_watchlist() expects."""
+    Mirrors what load_watchlist() expects. NOTE: comments in an existing file are not
+    preserved (safe_dump rewrites it) — fine for the per-user profile configs this
+    serves; not meant for the owner's hand-annotated repo config/."""
     clean, seen = [], set()
     for t in tickers:
         u = str(t).strip().upper()
@@ -187,7 +189,9 @@ def save_watchlist(config_dir, tickers, settings=None) -> None:
 
 def save_positions(config_dir, positions) -> None:
     """Persist positions.yaml in the shape load_positions() reads. Optional fields
-    (entry_date, shares, *_pct) are omitted when blank/None to keep the file clean."""
+    (entry_date, shares, *_pct) are omitted when blank/None to keep the file clean.
+    NOTE: comments in an existing file are not preserved (safe_dump rewrites it) —
+    fine for the per-user profile configs this serves."""
     out = []
     for p in positions:
         ticker = str(p["ticker"]).strip().upper()
