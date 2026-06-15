@@ -28,9 +28,12 @@ def register(app) -> None:
 
     @app.put("/api/settings")
     def put_settings(body: SettingsBody, profile=Depends(get_profile)):
+        # Full replace, not a merge: any settings key absent from the body resets to
+        # its WatchSettings default. The UI always submits the complete settings form,
+        # so callers must send every field they want preserved.
         try:
             config.save_watchlist(profile.config_dir, body.tickers,
                                   body.settings.model_dump())
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=400, detail=str(e)) from e
         return {"ok": True}
