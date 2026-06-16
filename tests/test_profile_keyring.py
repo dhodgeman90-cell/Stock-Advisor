@@ -5,16 +5,18 @@ from src.profile import EnvSecrets, Profile
 
 
 def test_get_prefers_keyring_then_config_then_env(tmp_path, monkeypatch):
-    # .env on disk holds an old value; keyring holds the live one and must win.
-    (tmp_path / ".env").write_text("ANTHROPIC_API_KEY=from-dotenv\n", encoding="utf-8")
+    # .env on disk holds old values; keyring and config hold the live ones and must win.
+    (tmp_path / ".env").write_text(
+        "ANTHROPIC_API_KEY=from-dotenv\nEMAIL_TO=from-dotenv\n", encoding="utf-8")
     secrets_store.set_secret("ANTHROPIC_API_KEY", "from-keyring")
     s = EnvSecrets(dotenv_path=tmp_path / ".env",
                    keyring_service=secrets_store.SERVICE,
-                   config_values={"EMAIL_USER": "me@x.com"})
+                   config_values={"EMAIL_USER": "me@x.com", "EMAIL_TO": "from-config"})
     assert s.get("ANTHROPIC_API_KEY") == "from-keyring"     # keyring beats .env
     assert s.get("EMAIL_USER") == "me@x.com"                # config layer
-    monkeypatch.setenv("EMAIL_TO", "amb@x.com")
-    assert s.get("EMAIL_TO") == "amb@x.com"                 # falls through to env
+    assert s.get("EMAIL_TO") == "from-config"               # config beats .env (same key)
+    monkeypatch.setenv("EMAIL_HOST", "smtp.example.com")
+    assert s.get("EMAIL_HOST") == "smtp.example.com"        # falls through to process env
 
 
 def test_keyring_only_consulted_for_secret_keys(tmp_path):

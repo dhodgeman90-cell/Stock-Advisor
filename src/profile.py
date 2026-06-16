@@ -77,6 +77,7 @@ class EnvSecrets:
                 kv = secrets_store.get_secret(k)
                 if kv:
                     os.environ.setdefault(k, kv)
+        # str(val) because YAML config values may be non-str (e.g. int port 465); .env values are always strings.
         for key, val in self._config_values.items():
             if val not in (None, ""):
                 os.environ.setdefault(key, str(val))
