@@ -7,6 +7,7 @@ returned so the user can see and edit them.
 """
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from fastapi import Depends, HTTPException
@@ -14,6 +15,8 @@ from pydantic import BaseModel
 
 from src import config, secrets_store, briefing
 from src.deps import get_profile
+
+logger = logging.getLogger(__name__)
 
 
 class AiBody(BaseModel):
@@ -54,8 +57,11 @@ def register(app) -> None:
 
     @app.put("/api/integrations/email")
     def put_email(body: EmailBody, profile=Depends(get_profile)):
+        port = (body.port or "").strip()
+        if port and not port.isdigit():
+            raise HTTPException(status_code=400, detail="SMTP port must be a number.")
         config.save_integrations(profile.config_dir, user=body.user, to=body.to,
-                                 host=body.host, port=body.port)
+                                 host=body.host, port=port)
         # Refresh the live profile so a run/test in this session uses the new config.
         profile.secrets.update_config_values(config.load_integrations(profile.config_dir))
         if body.password is not None:
@@ -86,5 +92,9 @@ def register(app) -> None:
                 to_addr=s.get("EMAIL_TO"),
             )
         except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Send failed: {e}") from e
+            logger.warning("Test email send failed: %s", e)
+            raise HTTPException(
+                status_code=502,
+                detail="Send failed — check your email address, SMTP host/port, and app password.",
+            ) from e
         return {"ok": True}

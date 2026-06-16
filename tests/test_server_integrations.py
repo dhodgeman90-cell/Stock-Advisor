@@ -103,4 +103,41 @@ def test_test_email_502_on_send_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(briefing, "send_email", boom)
     r = client.post("/api/integrations/email/test")
     assert r.status_code == 502
-    assert "auth failed" in r.json()["detail"]
+    assert "Send failed" in r.json()["detail"]
+
+
+def test_put_email_empty_password_clears_it(tmp_path):
+    client, _ = _client(tmp_path)
+    secrets_store.set_secret("EMAIL_PASSWORD", "old-pw")
+    client.put("/api/integrations/email", json={
+        "user": "me@gmail.com", "to": "me@gmail.com",
+        "host": "smtp.gmail.com", "port": "465", "password": "",
+    })
+    assert secrets_store.has_secret("EMAIL_PASSWORD") is False
+
+
+def test_put_email_non_numeric_port_is_400(tmp_path):
+    client, _ = _client(tmp_path)
+    r = client.put("/api/integrations/email", json={
+        "user": "me@gmail.com", "to": "me@gmail.com", "host": "smtp.gmail.com", "port": "abc",
+    })
+    assert r.status_code == 400
+    assert "port" in r.json()["detail"].lower()
+
+
+def test_test_email_502_detail_does_not_echo_exception(tmp_path, monkeypatch):
+    from src import briefing
+    client, _ = _client(tmp_path)
+    client.put("/api/integrations/email", json={
+        "user": "me@gmail.com", "to": "me@gmail.com",
+        "host": "smtp.gmail.com", "port": "465", "password": "app-pw",
+    })
+
+    def boom(*a, **k):
+        raise RuntimeError("535 auth failed: app-pw rejected")
+
+    monkeypatch.setattr(briefing, "send_email", boom)
+    r = client.post("/api/integrations/email/test")
+    assert r.status_code == 502
+    assert "app-pw" not in r.json()["detail"]        # raw exception not reflected
+    assert "535" not in r.json()["detail"]
