@@ -9,3 +9,4 @@ snaptrade-python-sdk>=11.0
 fastapi>=0.110
 uvicorn>=0.30
 httpx>=0.27          # required by fastapi.testclient.TestClient (tests)
+keyring>=24          # OS credential store for BYO AI key + email app password (Integrations)

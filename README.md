@@ -30,6 +30,20 @@ run today's briefing), **Watchlist** (edit tickers + shortlist/lookback), **Posi
 (manual holdings), **Integrations** (optional power features — coming later).
 Rules-only by default: no API keys, no cost.
 
+### Integrations (optional)
+
+The app runs fully on rules-based signals with no setup. Two optional power features
+live on the **Integrations** screen:
+
+- **AI analysis** — paste your own Anthropic API key to enable the AI agents on
+  actionable days.
+- **Email briefing** — enter a Gmail address and a Gmail **app password** (not your
+  normal password) to have the briefing emailed. Use **Send test email** to confirm it.
+
+Keys are stored in your operating system's credential manager (Windows Credential
+Manager / macOS Keychain) — never in a plaintext file, and never shown again after you
+save them.
+
 ## Phase 1 (this build): deterministic core
 
 ### Setup (one time)
