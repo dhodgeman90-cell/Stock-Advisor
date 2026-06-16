@@ -206,3 +206,37 @@ def save_positions(config_dir, positions) -> None:
                 row[k] = p[k]
         out.append(row)
     _atomic_write_yaml(Path(config_dir) / "positions.yaml", {"positions": out})
+
+
+INTEGRATION_FIELDS = ("EMAIL_USER", "EMAIL_TO", "EMAIL_HOST", "EMAIL_PORT")
+
+
+def load_integrations(config_dir) -> dict:
+    """Non-secret email routing config from integrations.yaml, keyed by env-var name.
+
+    Secrets (the Anthropic key, the email app password) are NOT here — those live in
+    the OS credential store (see src/secrets_store.py). A missing/blank file yields {}.
+    """
+    path = Path(config_dir) / "integrations.yaml"
+    if not path.exists():
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    email = data.get("email") or {}
+    out = {}
+    for env_key, yaml_key in (("EMAIL_USER", "user"), ("EMAIL_TO", "to"),
+                              ("EMAIL_HOST", "host"), ("EMAIL_PORT", "port")):
+        val = email.get(yaml_key)
+        if val is not None and str(val).strip() != "":
+            out[env_key] = str(val).strip()
+    return out
+
+
+def save_integrations(config_dir, *, user="", to="", host="", port="") -> None:
+    """Persist non-secret email config to integrations.yaml. Blank fields are omitted
+    (never written as empty strings, which the engine would misread as 'configured')."""
+    email = {}
+    for yaml_key, val in (("user", user), ("to", to), ("host", host), ("port", port)):
+        if val is not None and str(val).strip() != "":
+            email[yaml_key] = str(val).strip()
+    _atomic_write_yaml(Path(config_dir) / "integrations.yaml", {"email": email})
