@@ -67,12 +67,38 @@
 
   <section id="screen-integrations" class="screen hidden">
     <h1>Integrations</h1>
-    <p class="muted">Optional power features &mdash; coming in a later update.</p>
-    <ul class="muted">
-      <li><b>AI analysis</b> (bring your own Anthropic key)</li>
-      <li><b>Email briefing</b> (bring your own Gmail app password)</li>
-    </ul>
-    <p class="muted">The app runs fully on rules-based signals without any of these.</p>
+    <p class="muted">All optional. The app runs fully on rules-based signals without any of these.
+    Keys are stored in your computer's credential manager and never shown again.</p>
+
+    <h2>AI analysis</h2>
+    <p class="muted">Bring your own Anthropic API key to enable the AI agents on actionable days.</p>
+    <div class="field"><label>Anthropic API key
+      <input id="ai-key" type="password" placeholder="sk-ant-…" autocomplete="off"></label></div>
+    <span id="ai-status" class="muted"></span>
+    <div class="row">
+      <button id="save-ai-btn">Save key</button>
+      <button id="clear-ai-btn">Clear</button>
+    </div>
+
+    <h2>Email briefing</h2>
+    <p class="muted">Bring your own Gmail <b>app password</b> (not your normal password) to have the
+    briefing emailed to you.</p>
+    <div class="field"><label>From address (Gmail)
+      <input id="email-user" type="email" placeholder="you@gmail.com" autocomplete="off"></label></div>
+    <div class="field"><label>Send to
+      <input id="email-to" type="email" placeholder="you@gmail.com" autocomplete="off"></label></div>
+    <div class="field"><label>SMTP host
+      <input id="email-host" type="text" value="smtp.gmail.com"></label></div>
+    <div class="field"><label>SMTP port
+      <input id="email-port" type="text" value="465"></label></div>
+    <div class="field"><label>App password
+      <input id="email-pass" type="password" placeholder="leave blank to keep current" autocomplete="off"></label></div>
+    <span id="email-status" class="muted"></span>
+    <div class="row">
+      <button id="save-email-btn">Save email settings</button>
+      <button id="test-email-btn">Send test email</button>
+    </div>
+    <span id="integrations-msg" class="msg"></span>
   </section>
 </main>
 

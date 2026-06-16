@@ -16,6 +16,7 @@ function showScreen(name) {
     b.classList.toggle("active", b.dataset.screen === name));
   if (name === "watchlist") loadSettings();
   if (name === "positions") loadPositions();
+  if (name === "integrations") loadIntegrations();
 }
 document.querySelectorAll(".nav-btn").forEach((b) =>
   b.addEventListener("click", () => showScreen(b.dataset.screen)));
@@ -124,6 +125,57 @@ $("#save-positions-btn").addEventListener("click", async () => {
     await api("/api/positions", { method: "PUT", body: JSON.stringify({ positions }) });
     $("#positions-msg").textContent = "Saved.";
   } catch (e) { $("#positions-msg").textContent = "Save failed: " + e.message; }
+});
+
+// ---- integrations ----
+async function loadIntegrations() {
+  const d = await api("/api/integrations");
+  $("#ai-status").textContent = d.ai.key_set ? "Key saved ✓" : "No key set.";
+  $("#ai-key").value = "";
+  $("#email-user").value = d.email.user || "";
+  $("#email-to").value = d.email.to || "";
+  $("#email-host").value = d.email.host || "smtp.gmail.com";
+  $("#email-port").value = d.email.port || "465";
+  $("#email-pass").value = "";
+  $("#email-status").textContent = d.email.password_set ? "App password saved ✓" : "No app password set.";
+  $("#integrations-msg").textContent = "";
+}
+$("#save-ai-btn").addEventListener("click", async () => {
+  try {
+    await api("/api/integrations/ai", { method: "PUT",
+      body: JSON.stringify({ api_key: $("#ai-key").value.trim() }) });
+    $("#integrations-msg").textContent = "AI key saved.";
+    loadIntegrations();
+  } catch (e) { $("#integrations-msg").textContent = "Save failed: " + e.message; }
+});
+$("#clear-ai-btn").addEventListener("click", async () => {
+  try {
+    await api("/api/integrations/ai", { method: "PUT", body: JSON.stringify({ api_key: "" }) });
+    $("#integrations-msg").textContent = "AI key cleared.";
+    loadIntegrations();
+  } catch (e) { $("#integrations-msg").textContent = "Clear failed: " + e.message; }
+});
+$("#save-email-btn").addEventListener("click", async () => {
+  const body = {
+    user: $("#email-user").value.trim(),
+    to: $("#email-to").value.trim(),
+    host: $("#email-host").value.trim() || "smtp.gmail.com",
+    port: $("#email-port").value.trim() || "465",
+  };
+  const pw = $("#email-pass").value;          // omit when blank -> keep existing
+  if (pw) body.password = pw;
+  try {
+    await api("/api/integrations/email", { method: "PUT", body: JSON.stringify(body) });
+    $("#integrations-msg").textContent = "Email settings saved.";
+    loadIntegrations();
+  } catch (e) { $("#integrations-msg").textContent = "Save failed: " + e.message; }
+});
+$("#test-email-btn").addEventListener("click", async () => {
+  $("#integrations-msg").textContent = "Sending test email…";
+  try {
+    await api("/api/integrations/email/test", { method: "POST" });
+    $("#integrations-msg").textContent = "Test email sent — check your inbox.";
+  } catch (e) { $("#integrations-msg").textContent = "Test failed: " + e.message; }
 });
 
 // ---- boot ----

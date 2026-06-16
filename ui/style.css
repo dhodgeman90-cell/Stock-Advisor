@@ -11,6 +11,7 @@ nav { display: flex; gap: 6px; }
 .nav-btn.active { background: #fff; color: #0f3d2e; font-weight: 600; }
 main { max-width: 640px; margin: 0 auto; padding: 24px; }
 .screen h1 { font-size: 20px; margin: 0 0 16px; }
+.screen h2 { font-size: 16px; margin: 24px 0 8px; }
 .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 button { background: #0f3d2e; color: #fff; border: 0; padding: 9px 16px;
   border-radius: 8px; cursor: pointer; font-size: 14px; }

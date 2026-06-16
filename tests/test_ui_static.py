@@ -23,3 +23,14 @@ def test_appjs_wires_the_api(tmp_path):
     for endpoint in ("/api/state", "/api/briefing/today", "/api/run",
                      "/api/settings", "/api/positions"):
         assert endpoint in js
+
+
+def test_integrations_ui_is_wired(tmp_path):
+    client = _client(tmp_path)   # reuse the helper already in this file
+    html = client.get("/").text
+    assert 'id="ai-key"' in html
+    assert 'id="email-user"' in html
+    assert 'id="test-email-btn"' in html
+    js = client.get("/app.js").text
+    assert "/api/integrations" in js
+    assert "loadIntegrations" in js
