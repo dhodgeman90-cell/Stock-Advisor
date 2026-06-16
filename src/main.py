@@ -74,6 +74,19 @@ def _discovery_feed(congress_trades, wsb_map, known_tickers, signals_cfg, today=
     return {"congress": congress_movers, "wsb": wsb_movers}
 
 
+def _ai_is_actionable(holdings, shortlist, buy_threshold) -> bool:
+    """Whether today warrants spending Claude tokens.
+
+    True when a holding is already flagging a deterministic exit signal, or a shortlist
+    candidate already scores buy-worthy. On a quiet day (neither) the per-ticker LLM
+    calls are skipped in favour of the deterministic NEUTRAL_* views, so the owner isn't
+    paying Haiku to rubber-stamp 'hold'.
+    """
+    if any(h.get("signals") for h in holdings):
+        return True
+    return any(s.get("score", 0) >= buy_threshold for s in shortlist)
+
+
 def run(profile: Profile | None = None, force: bool = False, *, fetch=None) -> RunResult:
     # Make console output crash-proof: the briefing contains emojis that the legacy
     # Windows console (cp1252) cannot encode. UTF-8 + replace avoids a crash without
@@ -144,16 +157,22 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None) -> R
         ok = df is not None
         if df is None:
             df = fetch(pos["ticker"], lookback)
-            ok, _ = data.validate(df, pos["ticker"])
+            ok, reason = data.validate(df, pos["ticker"])
             if ok:
                 data.save_cache(df, pos["ticker"], data_dir)
             else:
-                df = data.load_cache(pos["ticker"], data_dir)
-                ok = df is not None and data.validate(df, pos["ticker"])[0]
+                cached = data.load_cache(pos["ticker"], data_dir)
+                cache_ok, cache_reason = (data.validate(cached, pos["ticker"])
+                                          if cached is not None else (False, "no cache"))
+                df, ok = cached, cache_ok
+                if not ok:
+                    # Surface the failure instead of silently emitting a green "hold".
+                    print(f"[holdings: {pos['ticker']} price unavailable — "
+                          f"fresh: {reason}; cache: {cache_reason}]")
         if not ok:
             holdings.append({
                 "ticker": pos["ticker"], "current_price": float("nan"),
-                "pct_from_entry": 0.0, "signals": [],
+                "pct_from_entry": 0.0, "signals": [], "as_of": None,
                 "risk_flag": "no valid price data",
             })
             continue
@@ -181,24 +200,31 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None) -> R
     known = set(wl["tickers"]) | {h["ticker"] for h in holdings}
     discovery = _discovery_feed(congress_trades, wsb_map, known, signals_cfg)
 
-    has_llm = bool(secrets.get("ANTHROPIC_API_KEY"))
-    client = None
-    if has_llm:
-        from src import llm
-        client = llm.AnthropicClient()
-
-    if has_llm:
-        summary = _build_market_summary(scored) + " " + breadth["regime_hint"]
-        context = agents.context_agent(client, summary)
-    else:
-        context = {"regime": breadth["regime"], "note": breadth["regime_hint"]}
-
     cands = sorted((s for s in scored if not s["excluded"]),
                    key=lambda s: s["score"], reverse=True)
     shortlist = cands[:shortlist_size]
     others = [{"ticker": s["ticker"], "score": s["score"]} for s in cands[shortlist_size:]]
     excluded = [{"ticker": s["ticker"], "reason": s["reason"]}
                 for s in scored if s["excluded"]]
+
+    # Spend Claude tokens only when something is actionable (a flagged holding or a
+    # buy-worthy candidate). On a quiet day, skip the per-ticker LLM calls entirely.
+    buy_threshold = exit_rules["backtest"]["buy_threshold"]
+    holdings_actionable = any(h.get("signals") for h in holdings)
+    candidates_actionable = any(s["score"] >= buy_threshold for s in shortlist)
+    has_llm = bool(secrets.get("ANTHROPIC_API_KEY"))
+    use_ai = has_llm and _ai_is_actionable(holdings, shortlist, buy_threshold)
+
+    client = None
+    if use_ai:
+        from src import llm
+        client = llm.AnthropicClient()
+
+    if use_ai:
+        summary = _build_market_summary(scored) + " " + breadth["regime_hint"]
+        context = agents.context_agent(client, summary)
+    else:
+        context = {"regime": breadth["regime"], "note": breadth["regime_hint"]}
 
     ranked, vetoed = [], []
     for s in shortlist:
@@ -209,7 +235,7 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None) -> R
         insider_sig = insights.get_insider_signal(ticker)
         earnings_sig = insights.get_earnings(ticker)
 
-        if has_llm:
+        if use_ai and candidates_actionable:
             headlines = news.get_headlines(ticker)
             recent_closes = list(s["_df"]["Close"].tail(10))
             nv = agents.news_agent(client, ticker, headlines)
@@ -232,8 +258,10 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None) -> R
         (vetoed if adjd["vetoed"] else ranked).append(adjd)
     ranked.sort(key=lambda r: r["final_score"], reverse=True)
 
-    if has_llm:
+    if use_ai and holdings_actionable:
         for h in holdings:
+            if not h.get("signals"):
+                continue   # only spend a risk call on holdings already flagging an exit
             try:
                 df_h = df_by_ticker.get(h["ticker"])
                 recent = list(df_h["Close"].tail(10)) if df_h is not None else []
@@ -242,6 +270,10 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None) -> R
                     h["risk_flag"] = rv.get("reason") or "elevated risk"
             except Exception:
                 pass
+
+    if has_llm and not use_ai:
+        print("[AI agents skipped: no actionable buy/sell signals today — "
+              "running on deterministic signals only]")
 
     rotation_plan = rotation.build_rotation_plan(
         holdings, ranked, conviction=exit_rules["backtest"]["buy_threshold"], max_adds=MAX_ADDS,

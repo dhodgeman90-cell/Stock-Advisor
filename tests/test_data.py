@@ -1,7 +1,18 @@
 import datetime as dt
 
+import pandas as pd
+
 from src import data
 from tests.helpers import make_df
+
+
+def _df_with_volume_only_trailing_bar(prices):
+    """A valid history plus a yfinance-style placeholder last bar: volume present,
+    OHLC all NaN. This is exactly what poisoned AAPL/SOXL/... this morning."""
+    df = make_df(prices)
+    last = df.index[-1] + pd.Timedelta(days=1)
+    df.loc[last] = [float("nan"), float("nan"), float("nan"), float("nan"), 999_999]
+    return df
 
 
 def test_validate_accepts_good_data():
@@ -34,6 +45,32 @@ def test_cache_round_trip(tmp_path):
 
 def test_load_cache_missing_returns_none(tmp_path):
     assert data.load_cache("NOPE", tmp_path) is None
+
+
+def test_drop_incomplete_removes_volume_only_trailing_bar():
+    df = _df_with_volume_only_trailing_bar(list(range(50, 120)))   # 70 good + 1 NaN bar
+    cleaned = data._drop_incomplete(df)
+    assert len(cleaned) == len(df) - 1
+    assert not pd.isna(cleaned["Close"].iloc[-1])
+
+
+def test_validate_rejects_nan_last_close():
+    # Backstop: even if a NaN trailing bar slips past _drop_incomplete, validate must
+    # reject it rather than let close.iloc[-1] become NaN (the "price unavailable" bug).
+    df = _df_with_volume_only_trailing_bar(list(range(50, 120)))
+    ok, reason = data.validate(df, "NANLAST")
+    assert ok is False
+
+
+def test_load_cache_heals_poisoned_trailing_bar(tmp_path):
+    # Reproduces this morning's cache files: a valid CSV with a volume-only last row.
+    df = make_df(list(range(50, 120)))
+    data.save_cache(df, "HEAL", tmp_path)
+    with open(data.cache_path("HEAL", tmp_path), "a", encoding="utf-8") as f:
+        f.write("2099-01-01,,,,,999999\n")
+    loaded = data.load_cache("HEAL", tmp_path)
+    assert len(loaded) == len(df)
+    assert not pd.isna(loaded["Close"].iloc[-1])
 
 
 def test_window_bounds_honors_days_plus_warmup():
