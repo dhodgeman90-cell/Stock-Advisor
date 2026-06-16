@@ -1,0 +1,63 @@
+import os
+
+from src import secrets_store, config
+from src.profile import EnvSecrets, Profile
+
+
+def test_get_prefers_keyring_then_config_then_env(tmp_path, monkeypatch):
+    # .env on disk holds an old value; keyring holds the live one and must win.
+    (tmp_path / ".env").write_text("ANTHROPIC_API_KEY=from-dotenv\n", encoding="utf-8")
+    secrets_store.set_secret("ANTHROPIC_API_KEY", "from-keyring")
+    s = EnvSecrets(dotenv_path=tmp_path / ".env",
+                   keyring_service=secrets_store.SERVICE,
+                   config_values={"EMAIL_USER": "me@x.com"})
+    assert s.get("ANTHROPIC_API_KEY") == "from-keyring"     # keyring beats .env
+    assert s.get("EMAIL_USER") == "me@x.com"                # config layer
+    monkeypatch.setenv("EMAIL_TO", "amb@x.com")
+    assert s.get("EMAIL_TO") == "amb@x.com"                 # falls through to env
+
+
+def test_keyring_only_consulted_for_secret_keys(tmp_path):
+    # A non-secret key must not be looked up in the credential store.
+    secrets_store.set_secret("EMAIL_USER", "should-be-ignored")  # not a SECRET_KEY
+    s = EnvSecrets(dotenv_path=tmp_path / ".env",
+                   keyring_service=secrets_store.SERVICE,
+                   config_values={"EMAIL_USER": "from-config"})
+    assert s.get("EMAIL_USER") == "from-config"
+
+
+def test_apply_to_environ_pushes_keyring_and_config(tmp_path, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("EMAIL_USER", raising=False)
+    secrets_store.set_secret("ANTHROPIC_API_KEY", "sk-live")
+    s = EnvSecrets(dotenv_path=tmp_path / "nope.env",
+                   keyring_service=secrets_store.SERVICE,
+                   config_values={"EMAIL_USER": "me@x.com"})
+    s.apply_to_environ()
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-live"     # so anthropic.Anthropic() sees it
+    assert os.environ["EMAIL_USER"] == "me@x.com"
+
+
+def test_update_config_values_refreshes_live(tmp_path):
+    s = EnvSecrets(dotenv_path=tmp_path / ".env",
+                   keyring_service=secrets_store.SERVICE, config_values={})
+    assert s.get("EMAIL_TO") is None
+    s.update_config_values({"EMAIL_TO": "you@x.com"})
+    assert s.get("EMAIL_TO") == "you@x.com"
+
+
+def test_for_repo_does_not_use_keyring(tmp_path):
+    # Owner CLI must be untouched: keyring is never consulted for the repo profile.
+    secrets_store.set_secret("ANTHROPIC_API_KEY", "leak")
+    p = Profile.for_repo()
+    # The repo .env may or may not define the key; the point is keyring is NOT a source.
+    assert p.secrets._keyring_service is None
+
+
+def test_for_base_loads_integrations_and_enables_keyring(tmp_path):
+    config.save_integrations(tmp_path / "config", user="me@x.com", to="me@x.com",
+                             host="smtp.gmail.com", port="465")
+    secrets_store.set_secret("EMAIL_PASSWORD", "app-pw")
+    p = Profile.for_base(tmp_path)
+    assert p.secrets.get("EMAIL_USER") == "me@x.com"        # from integrations.yaml
+    assert p.secrets.get("EMAIL_PASSWORD") == "app-pw"      # from keyring

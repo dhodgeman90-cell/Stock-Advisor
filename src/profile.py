@@ -16,22 +16,25 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class EnvSecrets:
-    """Secret lookup with a fixed precedence: profile .env file, then process env.
+    """Secret/config lookup with a fixed precedence. For the per-user app the order is
+    OS credential store -> integrations.yaml config -> profile .env -> process env. For
+    the owner's repo profile, keyring_service is None and config_values is empty, so it
+    degrades to the original .env -> process-env behavior (owner CLI unchanged).
 
-    Values are read once at construction from the .env file (if present) into an
-    in-memory dict. `.get()` checks that dict first, then os.environ, so an explicit
-    profile secret wins over an ambient one. `.apply_to_environ()` pushes the file
-    values into os.environ (without clobbering existing vars) for the downstream
-    modules (broker, llm, congress) that still read os.environ directly —
-    reproducing today's load_dotenv() behavior.
+    apply_to_environ() pushes the resolved values into os.environ (without clobbering
+    existing vars) for the downstream modules (broker, llm, congress) that read
+    os.environ directly.
     """
 
-    def __init__(self, dotenv_path: Optional[Path] = None, values: Optional[dict] = None):
+    def __init__(self, dotenv_path: Optional[Path] = None, values: Optional[dict] = None,
+                 *, keyring_service: Optional[str] = None, config_values: Optional[dict] = None):
         self._dotenv_path = Path(dotenv_path) if dotenv_path else None
         if values is not None:
             self._values = dict(values)
         else:
             self._values = self._read_dotenv(self._dotenv_path)
+        self._keyring_service = keyring_service
+        self._config_values = dict(config_values or {})
 
     @staticmethod
     def _read_dotenv(path: Optional[Path]) -> dict:
@@ -47,13 +50,36 @@ class EnvSecrets:
         return {k: v for k, v in dotenv_values(path, interpolate=False, encoding="utf-8").items()
                 if v is not None}
 
+    def update_config_values(self, mapping: dict) -> None:
+        """Replace the in-memory non-secret config layer (after the user edits it via
+        the API), so the change takes effect without restarting the server."""
+        self._config_values = dict(mapping or {})
+
     def get(self, key: str, default=None):
+        if self._keyring_service is not None:
+            from src import secrets_store
+            if key in secrets_store.SECRET_KEYS:
+                kv = secrets_store.get_secret(key)
+                if kv:
+                    return kv
+        cv = self._config_values.get(key)
+        if cv is not None and cv != "":
+            return cv
         val = self._values.get(key)
         if val is not None and val != "":
             return val
         return os.environ.get(key, default)
 
     def apply_to_environ(self) -> None:
+        if self._keyring_service is not None:
+            from src import secrets_store
+            for k in secrets_store.SECRET_KEYS:
+                kv = secrets_store.get_secret(k)
+                if kv:
+                    os.environ.setdefault(k, kv)
+        for key, val in self._config_values.items():
+            if val not in (None, ""):
+                os.environ.setdefault(key, str(val))
         for key, val in self._values.items():
             if val != "":
                 os.environ.setdefault(key, val)
@@ -78,13 +104,24 @@ class Profile:
 
     @classmethod
     def for_base(cls, base) -> "Profile":
-        """Per-user profile rooted at an arbitrary base dir (e.g. %APPDATA%/StockAdvisor)."""
+        """Per-user profile rooted at an arbitrary base dir (e.g. %APPDATA%/StockAdvisor).
+
+        Enables the OS credential store (for the two secret keys) and loads the
+        non-secret email config from integrations.yaml. The owner's repo profile
+        (for_repo) deliberately does NOT enable these."""
+        from src import config as _config
+        from src import secrets_store
         base = Path(base)
+        config_dir = base / "config"
         return cls(
-            config_dir=base / "config",
+            config_dir=config_dir,
             data_dir=base / "data",
             reports_dir=base / "reports",
-            secrets=EnvSecrets(dotenv_path=base / ".env"),
+            secrets=EnvSecrets(
+                dotenv_path=base / ".env",
+                keyring_service=secrets_store.SERVICE,
+                config_values=_config.load_integrations(config_dir),
+            ),
         )
 
     def ensure_dirs(self) -> None:
