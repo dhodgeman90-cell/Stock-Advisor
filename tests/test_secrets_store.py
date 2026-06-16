@@ -20,7 +20,7 @@ def test_get_missing_is_none():
     assert secrets_store.get_secret("EMAIL_PASSWORD") is None
 
 
-def test_backend_failure_degrades_to_none(monkeypatch):
+def test_backend_failure_degrades_to_none():
     class Boom:
         def get_password(self, *a):
             raise RuntimeError("no backend")

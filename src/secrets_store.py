@@ -30,6 +30,7 @@ def _get_backend():
 
 def get_secret(key: str):
     try:
+        # `or None` normalises keyring's missing-key return and treats a stored empty string as absent
         return _get_backend().get_password(SERVICE, key) or None
     except Exception:
         return None
