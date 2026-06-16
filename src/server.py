@@ -25,4 +25,7 @@ def create_app(profile: Profile) -> FastAPI:
     from src import routes_briefing
     routes_briefing.register(app)
 
+    from src import routes_integrations
+    routes_integrations.register(app)
+
     return app
