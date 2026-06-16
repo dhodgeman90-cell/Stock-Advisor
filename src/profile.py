@@ -35,6 +35,7 @@ class EnvSecrets:
             self._values = self._read_dotenv(self._dotenv_path)
         self._keyring_service = keyring_service
         self._config_values = dict(config_values or {})
+        self._applied_keys: set = set()   # feature keys THIS instance pushed into os.environ
 
     @staticmethod
     def _read_dotenv(path: Optional[Path]) -> dict:
@@ -55,7 +56,20 @@ class EnvSecrets:
         the API), so the change takes effect without restarting the server."""
         self._config_values = dict(mapping or {})
 
-    def get(self, key: str, default=None):
+    def _managed_keys(self) -> tuple:
+        """Feature-owned keys whose authoritative source is the OS credential store /
+        integrations config. Empty for the owner's repo profile (keyring_service=None),
+        so that profile's behavior is completely unchanged."""
+        if self._keyring_service is None:
+            return ()
+        from src import secrets_store
+        from src import config as _config
+        return (*secrets_store.SECRET_KEYS, *_config.INTEGRATION_FIELDS)
+
+    def _resolve_from_sources(self, key: str):
+        """Resolve keyring -> integrations config -> profile .env. Deliberately EXCLUDES
+        os.environ (which is apply_to_environ's write sink) so it never returns a value
+        this instance previously pushed there."""
         if self._keyring_service is not None:
             from src import secrets_store
             if key in secrets_store.SECRET_KEYS:
@@ -68,21 +82,33 @@ class EnvSecrets:
         val = self._values.get(key)
         if val is not None and val != "":
             return val
+        return None
+
+    def get(self, key: str, default=None):
+        resolved = self._resolve_from_sources(key)
+        if resolved is not None:
+            return resolved
         return os.environ.get(key, default)
 
     def apply_to_environ(self) -> None:
-        if self._keyring_service is not None:
-            from src import secrets_store
-            for k in secrets_store.SECRET_KEYS:
-                kv = secrets_store.get_secret(k)
-                if kv:
-                    os.environ.setdefault(k, kv)
-        # str(val) because YAML config values may be non-str (e.g. int port 465); .env values are always strings.
-        for key, val in self._config_values.items():
-            if val not in (None, ""):
-                os.environ.setdefault(key, str(val))
+        # Feature-owned keys are kept AUTHORITATIVE in os.environ: push the freshly
+        # resolved value (so a rotation takes effect) and remove a value THIS instance
+        # previously pushed once it has been cleared (so a long-lived server process stops
+        # exporting a secret the user deleted). Ambient vars we never set are left alone.
+        managed = self._managed_keys()
+        for key in managed:
+            resolved = self._resolve_from_sources(key)
+            if resolved is not None and resolved != "":
+                os.environ[key] = str(resolved)
+                self._applied_keys.add(key)
+            elif key in self._applied_keys:
+                os.environ.pop(key, None)
+                self._applied_keys.discard(key)
+        # Non-feature .env values keep the original back-compat behavior (owner CLI path):
+        # set only when absent, never clobber an existing/ambient var.
+        managed_set = set(managed)
         for key, val in self._values.items():
-            if val != "":
+            if val != "" and key not in managed_set:
                 os.environ.setdefault(key, val)
 
 

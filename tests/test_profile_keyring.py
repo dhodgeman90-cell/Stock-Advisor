@@ -63,3 +63,50 @@ def test_for_base_loads_integrations_and_enables_keyring(tmp_path):
     p = Profile.for_base(tmp_path)
     assert p.secrets.get("EMAIL_USER") == "me@x.com"        # from integrations.yaml
     assert p.secrets.get("EMAIL_PASSWORD") == "app-pw"      # from keyring
+
+
+def test_apply_purges_a_cleared_secret_across_runs(tmp_path, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    s = EnvSecrets(dotenv_path=tmp_path / ".env",
+                   keyring_service=secrets_store.SERVICE, config_values={})
+    secrets_store.set_secret("ANTHROPIC_API_KEY", "sk-first")
+    s.apply_to_environ()
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-first"
+    # user clears the key in the UI, then the long-lived server runs again
+    secrets_store.delete_secret("ANTHROPIC_API_KEY")
+    s.apply_to_environ()
+    assert "ANTHROPIC_API_KEY" not in os.environ      # stale value purged
+    assert s.get("ANTHROPIC_API_KEY") is None          # gate no longer sees it
+
+
+def test_apply_overwrites_a_rotated_secret_across_runs(tmp_path, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    s = EnvSecrets(dotenv_path=tmp_path / ".env",
+                   keyring_service=secrets_store.SERVICE, config_values={})
+    secrets_store.set_secret("ANTHROPIC_API_KEY", "sk-old")
+    s.apply_to_environ()
+    secrets_store.set_secret("ANTHROPIC_API_KEY", "sk-new")   # rotate
+    s.apply_to_environ()
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-new"        # SDK sees the new key
+    assert s.get("ANTHROPIC_API_KEY") == "sk-new"
+
+
+def test_apply_leaves_ambient_unowned_managed_var_intact(tmp_path, monkeypatch):
+    # A managed-name var present only in the real environment (we never set it) must not
+    # be purged: we only remove values THIS instance pushed.
+    monkeypatch.setenv("EMAIL_HOST", "ambient.example.com")
+    s = EnvSecrets(dotenv_path=tmp_path / ".env",
+                   keyring_service=secrets_store.SERVICE, config_values={})
+    s.apply_to_environ()
+    assert os.environ["EMAIL_HOST"] == "ambient.example.com"
+    assert s.get("EMAIL_HOST") == "ambient.example.com"
+
+
+def test_for_repo_apply_is_unchanged_setdefault(tmp_path, monkeypatch):
+    # Owner CLI: no managed keys, .env values pushed via setdefault, never clobbering.
+    monkeypatch.setenv("OWNER_VAR", "ambient")
+    s = EnvSecrets(values={"OWNER_VAR": "from-dotenv", "OTHER": "x"})
+    # keyring_service is None here -> nothing is "managed"
+    s.apply_to_environ()
+    assert os.environ["OWNER_VAR"] == "ambient"   # setdefault did NOT clobber
+    assert os.environ["OTHER"] == "x"
