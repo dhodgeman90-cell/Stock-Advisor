@@ -3,7 +3,26 @@ from pathlib import Path
 import pandas as pd
 
 REQUIRED_COLS = ["Open", "High", "Low", "Close", "Volume"]
+OHLC_COLS = ["Open", "High", "Low", "Close"]
 WARMUP_DAYS = 100   # extra calendar days so the SMA-50 / MIN_HISTORY ramp is warm
+
+
+def _drop_incomplete(df):
+    """Drop rows missing any OHLC value.
+
+    yfinance intermittently returns a placeholder bar for the latest day that carries
+    volume but NaN prices (it varies ticker-to-ticker on any given morning). Such a bar
+    can never produce a valid price, yet it would otherwise become close.iloc[-1] and
+    surface as "price unavailable" + a silent "hold". Stripping these rows here means a
+    poisoned bar can never reach the engine — whether it arrives fresh from the network
+    or from a previously-cached CSV.
+    """
+    if df is None or len(df) == 0:
+        return df
+    present = [c for c in OHLC_COLS if c in df.columns]
+    if not present:
+        return df
+    return df.dropna(subset=present)
 
 
 def validate(df, ticker: str, min_rows: int = 50):
@@ -15,7 +34,11 @@ def validate(df, ticker: str, min_rows: int = 50):
         return False, f"{ticker}: missing columns {missing}"
     if len(df) < min_rows:
         return False, f"{ticker}: only {len(df)} rows (need >= {min_rows})"
-    if df["Close"].isna().all() or (df["Close"] <= 0).any():
+    close = df["Close"]
+    # Backstop against a NaN trailing bar slipping through: the LAST close is what the
+    # engine reads as "current price", so a NaN there must fail validation, not just an
+    # all-NaN column. dropna() on the <= 0 check keeps NaN from masking a real zero/neg.
+    if close.isna().all() or pd.isna(close.iloc[-1]) or (close.dropna() <= 0).any():
         return False, f"{ticker}: invalid close prices"
     return True, ""
 
@@ -32,7 +55,7 @@ def save_cache(df, ticker: str, data_dir) -> None:
 def load_cache(ticker: str, data_dir):
     path = cache_path(ticker, data_dir)
     if path.exists():
-        return pd.read_csv(path, index_col=0, parse_dates=True)
+        return _drop_incomplete(pd.read_csv(path, index_col=0, parse_dates=True))
     return None
 
 
@@ -67,4 +90,4 @@ def fetch_history(ticker: str, days: int):
     # Newer yfinance returns MultiIndex columns even for a single ticker
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
-    return df
+    return _drop_incomplete(df)

@@ -51,6 +51,23 @@ def test_discovery_feed_excludes_known_tickers_and_small_or_quiet_names():
     assert [w["ticker"] for w in feed["wsb"]] == ["ZYX"]
 
 
+def test_ai_is_actionable_true_when_holding_has_exit_signal():
+    holdings = [{"ticker": "SOXL", "signals": [{"type": "stop_loss"}]}]
+    assert main._ai_is_actionable(holdings, shortlist=[], buy_threshold=65) is True
+
+
+def test_ai_is_actionable_true_when_candidate_clears_buy_threshold():
+    shortlist = [{"ticker": "AAA", "score": 70}]
+    assert main._ai_is_actionable(holdings=[], shortlist=shortlist, buy_threshold=65) is True
+
+
+def test_ai_is_actionable_false_on_a_quiet_day():
+    # No flagged holdings and no candidate clears the buy bar -> no Claude tokens spent.
+    holdings = [{"ticker": "SOXL", "signals": []}]
+    shortlist = [{"ticker": "AAA", "score": 50}, {"ticker": "BBB", "score": 64}]
+    assert main._ai_is_actionable(holdings, shortlist, buy_threshold=65) is False
+
+
 import tests.helpers as helpers
 from src.profile import Profile, EnvSecrets
 

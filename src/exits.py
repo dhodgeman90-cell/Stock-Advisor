@@ -88,9 +88,12 @@ def evaluate_exit(df, position, rules) -> dict:
                        f"on drying volume ({vol_ratio:.1f}x avg)"),
         })
 
+    last_ts = df.index[-1]
+    as_of = str(last_ts.date()) if hasattr(last_ts, "date") else str(last_ts)
     return {
         "ticker": position["ticker"],
         "current_price": price,
         "pct_from_entry": pct_from_entry,
         "signals": signals,
+        "as_of": as_of,
     }

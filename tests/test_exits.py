@@ -70,6 +70,15 @@ def test_per_position_override_suppresses_default_stop():
     assert "stop_loss" not in _types(result)
 
 
+def test_evaluate_exit_reports_as_of_date():
+    # The briefing needs the date of the bar it priced off so a stale (but valid)
+    # price can be shown honestly instead of masquerading as today's.
+    df = make_df(list(range(50, 110)))
+    position = {"ticker": "T", "entry_price": 100.0}
+    result = exits.evaluate_exit(df, position, RULES)
+    assert result["as_of"] == str(df.index[-1].date())
+
+
 def test_clean_holding_returns_no_signals():
     df = make_df(list(range(50, 110)))            # uptrend, price above MAs
     position = {"ticker": "T", "entry_price": 108.0}   # ~0.9% up

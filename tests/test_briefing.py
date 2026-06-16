@@ -110,6 +110,20 @@ def test_render_holdings_section_handles_unavailable_price():
     assert "nan" not in text.lower()
 
 
+def test_render_holdings_section_flags_stale_price():
+    h = {"ticker": "NVDA", "current_price": 109.0, "pct_from_entry": 2.0,
+         "signals": [], "as_of": "2026-06-12"}
+    text = briefing.render_holdings_section([h], run_date="2026-06-16")
+    assert "as of 2026-06-12" in text
+
+
+def test_render_holdings_section_no_stale_note_when_current():
+    h = {"ticker": "NVDA", "current_price": 109.0, "pct_from_entry": 2.0,
+         "signals": [], "as_of": "2026-06-16"}
+    text = briefing.render_holdings_section([h], run_date="2026-06-16")
+    assert "as of" not in text
+
+
 def test_render_briefing_puts_holdings_above_candidates():
     ranked = [_adjudicated("HI", 88, 80, "new deal", "low", "no flags", ["+15 catalyst"])]
     holdings = [_holding("NVDA", 109.0, -9.2,

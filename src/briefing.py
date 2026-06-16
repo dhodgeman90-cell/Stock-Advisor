@@ -17,7 +17,13 @@ def _signal_pill(level):
     return _PILL_COLORS.get(level, _PILL_COLORS["hold"])
 
 
-def render_holdings_section(holdings) -> str:
+def _is_stale(as_of, run_date) -> bool:
+    """True when the priced bar predates the run date (ISO strings sort chronologically),
+    so a valid-but-stale price can be labelled instead of passing as today's."""
+    return bool(as_of and run_date and str(as_of) < str(run_date))
+
+
+def render_holdings_section(holdings, run_date=None) -> str:
     """Markdown block for current holdings + their exit signals. Leads the briefing."""
     lines = ["## 📊 Your holdings"]
     if not holdings:
@@ -28,9 +34,10 @@ def render_holdings_section(holdings) -> str:
         if isinstance(price, float) and math.isnan(price):
             lines.append(f"- **{h['ticker']}**: price unavailable")
         else:
+            stale = f" — _as of {h['as_of']}_" if _is_stale(h.get("as_of"), run_date) else ""
             lines.append(
                 f"- **{h['ticker']}**: ${price:.2f} "
-                f"({h['pct_from_entry']:+.1f}% from entry)"
+                f"({h['pct_from_entry']:+.1f}% from entry){stale}"
             )
         if h["signals"]:
             for s in h["signals"]:
@@ -142,7 +149,7 @@ def render_briefing(ranked, vetoed, others, excluded, date_str, regime, regime_n
         "",
         render_rotation_section(rotation_plan),
         "",
-        render_holdings_section(holdings),
+        render_holdings_section(holdings, run_date=date_str),
         "",
         "## Top candidates",
     ]
@@ -186,7 +193,7 @@ def render_briefing(ranked, vetoed, others, excluded, date_str, regime, regime_n
     return "\n".join(L) + "\n"
 
 
-def _holdings_html(holdings, e) -> str:
+def _holdings_html(holdings, e, run_date=None) -> str:
     """HTML table of holdings with a color-coded signal pill per row."""
     if not holdings:
         return ('<div style="font-size:12.5px;color:#6b7280;">'
@@ -204,7 +211,9 @@ def _holdings_html(holdings, e) -> str:
         if isinstance(price, float) and math.isnan(price):
             price_cell, pct_cell = "price unavailable", ""
         else:
-            price_cell = f"${price:.2f}"
+            stale = (f'<div style="font-size:10.5px;color:#9ca3af;">as of {e(str(h["as_of"]))}</div>'
+                     if _is_stale(h.get("as_of"), run_date) else "")
+            price_cell = f"${price:.2f}{stale}"
             pct = h["pct_from_entry"]
             color = "#16a34a" if pct >= 0 else "#dc2626"
             pct_cell = f'<span style="color:{color};font-weight:600;">{pct:+.1f}%</span>'
@@ -323,7 +332,7 @@ def render_briefing_html(ranked, vetoed, others, excluded, date_str, regime,
         _rotation_html(rotation_plan, e, green),
         '<div style="font-size:14px;font-weight:700;color:#0f172a;margin:18px 0 10px;">'
         '📊 Your holdings</div>',
-        _holdings_html(holdings or [], e),
+        _holdings_html(holdings or [], e, date_str),
         '<div style="font-size:14px;font-weight:700;color:#0f172a;margin:20px 0 10px;">'
         'Top candidates</div>',
     ]
