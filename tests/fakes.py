@@ -71,3 +71,26 @@ class FakeSMTP:
 
     def send_message(self, msg):
         self.sent_message = msg
+
+
+class FakeKeyring:
+    """In-memory stand-in for the `keyring` module's password API.
+
+    Used by the autouse conftest fixture so tests never touch the real OS
+    credential store. Mirrors keyring's interface: set/get/delete_password,
+    keyed by (service, key). delete of a missing key raises, like keyring does.
+    """
+
+    def __init__(self):
+        self._store = {}
+
+    def get_password(self, service, key):
+        return self._store.get((service, key))
+
+    def set_password(self, service, key, value):
+        self._store[(service, key)] = value
+
+    def delete_password(self, service, key):
+        if (service, key) not in self._store:
+            raise KeyError(f"no such password: {service}/{key}")
+        del self._store[(service, key)]
