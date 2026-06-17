@@ -82,6 +82,12 @@ def _projected_score(base_score, context, caps, *, congress=None, wsb=None,
     is therefore worth spending Claude tokens on. Gating on the raw base score alone (the
     old behaviour) skipped AI for names that clear the bar via those deterministic
     boosts — exactly the candidates the briefing then recommends.
+
+    Known limitation: the projection uses the deterministic regime; the AI context_agent
+    can flip the regime by ±caps["regime"] in the final adjudication. So a name projecting
+    within caps["regime"] just below buy_threshold can still cross the bar in the final
+    score yet be labelled rules-only. The deterministic boosts (+8..+18) dwarf that ±5
+    wobble, so this is an accepted edge for now rather than widening AI spend near the bar.
     """
     proj = adjudicator.adjudicate(
         {"ticker": "_", "score": base_score},

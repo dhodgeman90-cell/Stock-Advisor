@@ -272,3 +272,19 @@ def test_no_ai_run_labels_candidates_rules_only_not_unavailable(tmp_path, monkey
 
     assert "news agent unavailable" not in result.text
     assert "rules-only" in result.text
+
+
+def test_skipped_views_score_identically_to_neutral_views():
+    # The honest "rules-only" skip label must not change the score vs the old NEUTRAL_*
+    # fallback — only the displayed text differs (guards a future edit that reads summary).
+    from src import agents, adjudicator
+    common = dict(congress={"net_side": "buy", "n_members": 2},
+                  analyst={"rating": "buy", "upside_pct": 10}, thresholds=_THR,
+                  social_view=dict(agents.NEUTRAL_SOCIAL))
+    neutral = adjudicator.adjudicate(
+        {"ticker": "X", "score": 50}, dict(agents.NEUTRAL_NEWS), dict(agents.NEUTRAL_RISK),
+        _CTX, _CAPS, **common)
+    skipped = adjudicator.adjudicate(
+        {"ticker": "X", "score": 50}, dict(agents.SKIPPED_NEWS), dict(agents.SKIPPED_RISK),
+        _CTX, _CAPS, **common)
+    assert neutral["final_score"] == skipped["final_score"]
