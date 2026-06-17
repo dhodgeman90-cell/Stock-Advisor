@@ -5,7 +5,8 @@ from pathlib import Path
 import pandas as pd
 
 from src import (config, data, scoring, news, agents, adjudicator, briefing,
-                 exits, broker, social, congress, insights, market, rotation)
+                 exits, broker, social, congress, insights, market, rotation,
+                 objectives, onboarding)
 from src.profile import Profile
 from src.results import RunResult
 
@@ -138,8 +139,9 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None) -> R
         print(msg)
         return RunResult(date=date_str, text=msg, skipped=True)
 
+    objective = onboarding.get_objective(profile)
     wl = config.load_watchlist(profile.config_dir)
-    weights = config.load_weights(profile.config_dir)
+    weights = objectives.apply_weights(config.load_weights(profile.config_dir), objective)
     caps = config.load_adjudicator(profile.config_dir)
     signals_cfg = config.load_signals(profile.config_dir)
     thr = signals_cfg["thresholds"]
@@ -173,7 +175,7 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None) -> R
         load_overrides=lambda: config.load_position_overrides(profile.config_dir),
         on_error=lambda e: print(f"[holdings: SnapTrade sync failed, using positions.yaml: {e}]"),
     )
-    exit_rules = config.load_exit_rules(profile.config_dir)
+    exit_rules = objectives.apply_exit_rules(config.load_exit_rules(profile.config_dir), objective)
     df_by_ticker = {s["ticker"]: s.get("_df") for s in scored if s.get("_df") is not None}
 
     holdings = []
@@ -326,13 +328,14 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None) -> R
         holdings, ranked, conviction=exit_rules["backtest"]["buy_threshold"], max_adds=MAX_ADDS,
     )
 
+    tone = objectives.tone_line(objective)
     text = briefing.render_briefing(
         ranked, vetoed, others, excluded, date_str, context["regime"], context["note"],
-        holdings=holdings, rotation_plan=rotation_plan, discovery=discovery,
+        holdings=holdings, rotation_plan=rotation_plan, discovery=discovery, tone_line=tone,
     )
     html = briefing.render_briefing_html(
         ranked, vetoed, others, excluded, date_str, context["regime"], context["note"],
-        holdings=holdings, rotation_plan=rotation_plan, discovery=discovery,
+        holdings=holdings, rotation_plan=rotation_plan, discovery=discovery, tone_line=tone,
     )
     report_path = reports_dir / f"{date_str}.md"
     report_path.write_text(text, encoding="utf-8")
