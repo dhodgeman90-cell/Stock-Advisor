@@ -14,6 +14,8 @@ async function api(path, opts = {}) {
   return res.json();
 }
 
+let objectiveOptions = [];   // [{key,label}] in slider order
+
 // ---- navigation ----
 function showScreen(name) {
   document.querySelectorAll(".screen").forEach((s) => s.classList.add("hidden"));
@@ -44,7 +46,7 @@ async function runBriefing() {
   $("#briefing-status").textContent = "Running… fetching market data (this can take ~30s).";
   try {
     const r = await api("/api/run", { method: "POST" });
-    if (r.status === "ok") { await loadBriefing(false); }
+    if (r.status === "ok") { await loadBriefing(false); await loadHistory(); }
     else if (r.status === "skipped") { $("#briefing-status").textContent = r.message; }
     else { $("#briefing-status").textContent = "Run failed: " + (r.message || "unknown error"); }
   } catch (e) {
@@ -54,6 +56,44 @@ async function runBriefing() {
   }
 }
 $("#run-btn").addEventListener("click", runBriefing);
+
+// ---- objective slider ----
+async function loadObjective() {
+  const d = await api("/api/objective");
+  objectiveOptions = d.options;
+  const slider = $("#objective-slider");
+  slider.max = String(objectiveOptions.length - 1);
+  const idx = objectiveOptions.findIndex((o) => o.key === d.objective);
+  slider.value = String(idx < 0 ? 1 : idx);
+  $("#objective-label").textContent = objectiveOptions[slider.value]?.label || "Balanced";
+}
+$("#objective-slider").addEventListener("input", () => {
+  const o = objectiveOptions[$("#objective-slider").value];
+  if (o) $("#objective-label").textContent = o.label;
+});
+$("#objective-slider").addEventListener("change", async () => {
+  const o = objectiveOptions[$("#objective-slider").value];
+  if (!o) return;
+  try {
+    await api("/api/objective", { method: "PUT", body: JSON.stringify({ objective: o.key }) });
+    $("#briefing-status").textContent =
+      `Strategy set to ${o.label}. Click “Run now” to generate a briefing with it.`;
+  } catch (e) { $("#briefing-status").textContent = "Could not save strategy: " + e.message; }
+});
+
+// ---- briefing history ----
+async function loadHistory(selectId) {
+  const { items } = await api("/api/briefing/history");
+  const sel = $("#briefing-history");
+  sel.innerHTML = items.map((i) => `<option value="${esc(i.id)}">${esc(i.label)}</option>`).join("");
+  if (selectId) sel.value = selectId;
+}
+$("#briefing-history").addEventListener("change", async () => {
+  const id = $("#briefing-history").value;
+  if (!id) return;
+  const d = await api("/api/briefing/item/" + encodeURIComponent(id));
+  if (d.status === "ok") $("#briefing-content").innerHTML = d.html;
+});
 
 // ---- watchlist / settings ----
 let tickers = [];
@@ -187,15 +227,17 @@ $("#test-email-btn").addEventListener("click", async () => {
 // ---- boot ----
 async function boot() {
   const state = await api("/api/state");
+  await loadObjective();
+  const start = async () => { await loadBriefing(); await loadHistory(); };
   if (!state.disclaimer_accepted) {
     $("#disclaimer").classList.remove("hidden");
     $("#accept-btn").addEventListener("click", async () => {
       await api("/api/disclaimer/accept", { method: "POST" });
       $("#disclaimer").classList.add("hidden");
-      loadBriefing();
+      start();
     });
   } else {
-    loadBriefing();
+    start();
   }
 }
 boot();
