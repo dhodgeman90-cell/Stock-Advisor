@@ -1,0 +1,4 @@
+# Build-time only (NOT needed to run the app from source). Install with:
+#   python -m pip install -r requirements-build.txt
+pyinstaller>=6.6
+pillow>=10.0
