@@ -1,5 +1,7 @@
-"""Core routes: serve the static UI and handle disclaimer state."""
+"""Core routes: serve the static UI, disclaimer state, and the UI heartbeat."""
 from __future__ import annotations
+
+import time
 
 from fastapi import Depends
 from fastapi.responses import HTMLResponse, Response
@@ -32,4 +34,12 @@ def register(app) -> None:
     @app.post("/api/disclaimer/accept")
     def accept(profile=Depends(get_profile)):
         onboarding.accept_disclaimer(profile)
+        return {"ok": True}
+
+    @app.get("/api/ping")
+    def ping():
+        # Heartbeat from the open UI window. The launcher watches app.state.last_ping
+        # and shuts the app down once the pings stop (window closed). Monotonic clock
+        # so it's immune to wall-clock changes.
+        app.state.last_ping = time.monotonic()
         return {"ok": True}

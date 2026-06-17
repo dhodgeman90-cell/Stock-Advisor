@@ -41,7 +41,9 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,                       # UPX off: it raises antivirus false positives
-    console=True,                    # visible launcher window (clear stop = close it)
+    console=False,                   # windowed: no PowerShell window; app opens in an
+                                     # Edge/Chrome app window (src/app.py), closing it quits
+
     icon="installer/StockAdvisor.ico",
 )
 coll = COLLECT(

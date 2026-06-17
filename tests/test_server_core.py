@@ -26,3 +26,13 @@ def test_disclaimer_flow(tmp_path):
     assert client.get("/api/state").json()["disclaimer_accepted"] is False
     assert client.post("/api/disclaimer/accept").json()["ok"] is True
     assert client.get("/api/state").json()["disclaimer_accepted"] is True
+
+
+def test_ping_records_heartbeat(tmp_path):
+    profile = Profile.for_base(tmp_path)
+    onboarding.seed_profile(profile)
+    app = server.create_app(profile)
+    assert app.state.last_ping is None
+    client = TestClient(app)
+    assert client.get("/api/ping").json()["ok"] is True
+    assert app.state.last_ping is not None     # heartbeat recorded for the watchdog

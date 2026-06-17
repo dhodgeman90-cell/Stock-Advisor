@@ -12,6 +12,7 @@ def create_app(profile: Profile) -> FastAPI:
     app = FastAPI(title="Stock Advisor (local)")
     app.state.profile = profile
     app.state.last_result = None   # most recent RunResult, set by routes_briefing
+    app.state.last_ping = None     # heartbeat from the UI window; watched by the launcher
 
     from src import routes_core
     routes_core.register(app)

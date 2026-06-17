@@ -224,6 +224,11 @@ $("#test-email-btn").addEventListener("click", async () => {
   } catch (e) { $("#integrations-msg").textContent = "Test failed: " + e.message; }
 });
 
+// ---- heartbeat ----
+// Tells the local launcher this window is still open. When it stops (window closed),
+// the launcher shuts the app down. ~2s cadence; the watchdog tolerates a few misses.
+setInterval(() => { fetch("/api/ping").catch(() => {}); }, 2000);
+
 // ---- boot ----
 async function boot() {
   const state = await api("/api/state");
