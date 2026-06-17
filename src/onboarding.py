@@ -58,3 +58,16 @@ def accept_disclaimer(profile) -> None:
     state = _load_state(profile)
     state["disclaimer_accepted"] = True
     _state_path(profile).write_text(json.dumps(state, indent=2), encoding="utf-8")
+
+
+def get_objective(profile) -> str:
+    from src import objectives
+    return objectives.normalize(_load_state(profile).get("objective"))
+
+
+def set_objective(profile, key) -> None:
+    from src import objectives
+    profile.ensure_dirs()
+    state = _load_state(profile)
+    state["objective"] = objectives.normalize(key)
+    _state_path(profile).write_text(json.dumps(state, indent=2), encoding="utf-8")
