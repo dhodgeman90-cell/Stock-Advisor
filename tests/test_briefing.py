@@ -32,6 +32,27 @@ def test_render_briefing_orders_and_shows_sections():
     assert "not financial advice" in text.lower()
 
 
+def _tone_args():
+    return dict(ranked=[], vetoed=[], others=[], excluded=[], date_str="2026-06-17",
+                regime="neutral", regime_note="steady", holdings=[],
+                rotation_plan={}, discovery={})
+
+
+def test_markdown_tone_line_present_when_set():
+    out = briefing.render_briefing(**_tone_args(), tone_line="Aggressive lens")
+    assert "_Aggressive lens_" in out
+
+
+def test_markdown_tone_line_absent_by_default():
+    out = briefing.render_briefing(**_tone_args())
+    assert "lens_" not in out
+
+
+def test_html_tone_line_present_when_set():
+    out = briefing.render_briefing_html(**_tone_args(), tone_line="Aggressive lens")
+    assert "Aggressive lens" in out
+
+
 def test_send_email_logs_in_and_sends():
     fake = FakeSMTP()
     briefing.send_email(

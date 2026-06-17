@@ -1,6 +1,9 @@
 import datetime as dt
 
-from src import main, config
+import pandas as pd
+
+from src import main, config, scoring, onboarding, broker, social, congress, market, insights
+from src.profile import Profile
 
 
 def _ct(ticker, side, low, high, disclosure):
@@ -288,3 +291,41 @@ def test_skipped_views_score_identically_to_neutral_views():
         {"ticker": "X", "score": 50}, dict(agents.SKIPPED_NEWS), dict(agents.SKIPPED_RISK),
         _CTX, _CAPS, **common)
     assert neutral["final_score"] == skipped["final_score"]
+
+
+def _fake_fetch(ticker, lookback):
+    n = max(lookback, 60)
+    idx = pd.date_range("2024-01-01", periods=n, freq="B")
+    base = pd.Series(range(n), index=idx, dtype=float) + 100
+    return pd.DataFrame({"Open": base, "High": base + 1, "Low": base - 1,
+                         "Close": base, "Volume": 1_000_000.0}, index=idx)
+
+
+def _stub_feeds(monkeypatch):
+    """Make main.run fully offline+deterministic by neutralizing the network feeds."""
+    monkeypatch.setattr(broker, "resolve_positions", lambda **kw: [])
+    monkeypatch.setattr(social, "get_wsb_sentiment", lambda **kw: {})
+    monkeypatch.setattr(congress, "get_congress_trades", lambda **kw: [])
+    monkeypatch.setattr(congress, "aggregate_by_ticker", lambda trades: {})
+    monkeypatch.setattr(market, "get_market_breadth", lambda *a, **k: dict(market.NEUTRAL_BREADTH))
+    monkeypatch.setattr(insights, "get_insider_signal", lambda ticker: None)
+    monkeypatch.setattr(insights, "get_analyst_signal", lambda ticker: None)
+    monkeypatch.setattr(insights, "get_earnings", lambda ticker: None)
+
+
+def test_objective_changes_effective_weights(tmp_path, monkeypatch):
+    p = Profile.for_base(tmp_path)
+    onboarding.seed_profile(p)
+    onboarding.set_objective(p, "aggressive")
+    _stub_feeds(monkeypatch)
+
+    seen = {}
+    real = scoring.score_ticker
+    def spy(df, ticker, weights, settings):
+        seen["weights"] = weights
+        return real(df, ticker, weights, settings)
+    monkeypatch.setattr(scoring, "score_ticker", spy)
+
+    main.run(profile=p, force=True, fetch=_fake_fetch)
+    assert seen["weights"]["trend"] == 10        # aggressive preset, not the seeded 15
+    assert seen["weights"]["pullback"] == 0

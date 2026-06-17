@@ -136,16 +136,21 @@ def render_discovery_section(congress_movers, wsb_movers) -> str:
 
 
 def render_briefing(ranked, vetoed, others, excluded, date_str, regime, regime_note,
-                    holdings=None, rotation_plan=None, discovery=None) -> str:
+                    holdings=None, rotation_plan=None, discovery=None, tone_line=None) -> str:
     """Render the enriched daily briefing (Phase 2 + Phase 3 holdings + signal upgrade).
 
     `ranked` is pre-sorted by final_score. The rotation plan and holdings lead the
-    briefing; the discovery feed (untracked signals) trails it.
+    briefing; the discovery feed (untracked signals) trails it. `tone_line` is an
+    optional one-line strategy framing (set by the active objective preset).
     """
     L = [
         f"# Stock Advisor — {date_str}",
         "",
         f"**Market regime:** {regime} — {regime_note}",
+    ]
+    if tone_line:
+        L.append(f"_{tone_line}_")
+    L += [
         "",
         render_rotation_section(rotation_plan),
         "",
@@ -315,10 +320,13 @@ def _discovery_html(congress_movers, wsb_movers, e) -> str:
 
 
 def render_briefing_html(ranked, vetoed, others, excluded, date_str, regime,
-                         regime_note, holdings=None, rotation_plan=None, discovery=None) -> str:
+                         regime_note, holdings=None, rotation_plan=None, discovery=None,
+                         tone_line=None) -> str:
     """Styled HTML version of the daily briefing (plain-text fallback stays render_briefing)."""
     e = html.escape
     green = "#0f3d2e"
+    tone_html = (f'<div style="font-size:11.5px;color:#cdeede;margin-top:4px;'
+                 f'font-style:italic;">{e(tone_line)}</div>') if tone_line else ""
     P = [
         '<div style="background:#eef0f3;padding:22px;'
         'font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;">'
@@ -327,7 +335,7 @@ def render_briefing_html(ranked, vetoed, others, excluded, date_str, regime,
         f'<div style="padding:20px 24px;background:{green};color:#ffffff;">'
         f'<div style="font-size:20px;font-weight:700;">Stock Advisor</div>'
         f'<div style="font-size:12.5px;color:#a7d7c5;margin-top:2px;">'
-        f'{e(date_str)} &middot; {e(regime)} — {e(regime_note)}</div></div>',
+        f'{e(date_str)} &middot; {e(regime)} — {e(regime_note)}</div>{tone_html}</div>',
         '<div style="padding:18px 24px 22px;">',
         _rotation_html(rotation_plan, e, green),
         '<div style="font-size:14px;font-weight:700;color:#0f172a;margin:18px 0 10px;">'

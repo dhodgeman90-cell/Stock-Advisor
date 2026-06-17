@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 
-from src import config
+from src import config, objectives, onboarding
 from src.deps import get_profile
 
 
@@ -18,6 +18,10 @@ class WatchSettings(BaseModel):
 class SettingsBody(BaseModel):
     tickers: list[str]
     settings: WatchSettings = WatchSettings()
+
+
+class ObjectiveBody(BaseModel):
+    objective: str
 
 
 def register(app) -> None:
@@ -37,3 +41,15 @@ def register(app) -> None:
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         return {"ok": True}
+
+    @app.get("/api/objective")
+    def get_objective(profile=Depends(get_profile)):
+        return {
+            "objective": onboarding.get_objective(profile),
+            "options": [{"key": k, "label": label} for k, label in objectives.options()],
+        }
+
+    @app.put("/api/objective")
+    def put_objective(body: ObjectiveBody, profile=Depends(get_profile)):
+        onboarding.set_objective(profile, body.objective)
+        return {"ok": True, "objective": onboarding.get_objective(profile)}
