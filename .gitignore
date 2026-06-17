@@ -13,3 +13,9 @@ venv/
 
 # visual brainstorm scratch
 .superpowers/
+
+# packaging build output
+build/
+dist/
+installer/Output/
+*.exe
