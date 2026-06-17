@@ -6,7 +6,7 @@ import pandas as pd
 
 from src import (config, data, scoring, news, agents, adjudicator, briefing,
                  exits, broker, social, congress, insights, market, rotation,
-                 objectives, onboarding)
+                 objectives, onboarding, edgar, options, fetchpool)
 from src.profile import Profile
 from src.results import RunResult
 
@@ -75,8 +75,39 @@ def _discovery_feed(congress_trades, wsb_map, known_tickers, signals_cfg, today=
     return {"congress": congress_movers, "wsb": wsb_movers}
 
 
+def _neutral_bundle() -> dict:
+    """No-opinion per-candidate signal bundle (used if a ticker's enrichment fails)."""
+    return {
+        "analyst": dict(insights.NEUTRAL_ANALYST),
+        "insider": dict(insights.NEUTRAL_INSIDER),
+        "earnings": dict(insights.NEUTRAL_EARNINGS),
+        "short": dict(insights.NEUTRAL_SHORT),
+        "revision": dict(insights.NEUTRAL_REVISION),
+        "edgar": dict(edgar.NEUTRAL_SEC),
+        "options": dict(options.NEUTRAL_OPTIONS),
+    }
+
+
+def _enrich_candidate(ticker, cik_map, sec_window) -> dict:
+    """All per-ticker deterministic signals for one candidate (each degrades on its own).
+
+    Run once per shortlisted ticker, in parallel across tickers (see fetchpool) so the
+    several network round-trips overlap rather than stack up serially.
+    """
+    return {
+        "analyst": insights.get_analyst_signal(ticker),
+        "insider": insights.get_insider_signal(ticker),
+        "earnings": insights.get_earnings(ticker),
+        "short": insights.get_short_signal(ticker),
+        "revision": insights.get_revision_signal(ticker),
+        "edgar": edgar.get_sec_signal(ticker, cik_map, window_days=sec_window),
+        "options": options.get_options_signal(ticker),
+    }
+
+
 def _projected_score(base_score, context, caps, *, congress=None, wsb=None,
-                     analyst=None, insider=None, earnings=None, thresholds=None) -> float:
+                     analyst=None, insider=None, earnings=None, thresholds=None,
+                     edgar=None, options=None, short=None, revision=None) -> float:
     """Adjudicated score using ONLY the signals known WITHOUT AI: the base score plus the
     deterministic congress/insider/analyst/earnings/wsb boosts (AI news/risk/social are
     fed in NEUTRAL). This is what decides whether a candidate is shaping up as a buy and
@@ -95,6 +126,7 @@ def _projected_score(base_score, context, caps, *, congress=None, wsb=None,
         dict(agents.NEUTRAL_NEWS), dict(agents.NEUTRAL_RISK), context, caps,
         congress=congress, wsb=wsb, social_view=dict(agents.NEUTRAL_SOCIAL),
         analyst=analyst, insider=insider, earnings=earnings, thresholds=thresholds,
+        edgar=edgar, options=options, short=short, revision=revision,
     )
     return proj["final_score"]
 
@@ -219,6 +251,10 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None) -> R
     congress_trades = congress.get_congress_trades(cache_path=profile.data_dir / "congress_trades.json")
     congress_agg = congress.aggregate_by_ticker(congress_trades)
     breadth = market.get_market_breadth()
+    macro = market.get_macro_context()
+    # SEC ticker->CIK map: fetched once (cached) and shared across all per-candidate lookups.
+    cik_map = edgar.load_cik_map(cache_path=profile.data_dir / "sec_cik_map.json")
+    sec_window = thr.get("sec_window_days", 30)
 
     for h in holdings:
         h["congress"] = congress_agg.get(h["ticker"])
@@ -240,23 +276,38 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None) -> R
     # used to skip AI for names that become buys via those boosts — the exact candidates
     # the briefing recommends — leaving them labelled "news agent unavailable".
     buy_threshold = exit_rules["backtest"]["buy_threshold"]
-    det_context = {"regime": breadth["regime"], "note": breadth["regime_hint"]}
+    # Macro overlay is worst-of with breadth: an inverted curve / stressed credit can pull
+    # an otherwise-calm tape to risk_off. Both hints are shown so the regime is explainable.
+    combined_regime = ("risk_off" if "risk_off" in (breadth["regime"], macro["macro_regime"])
+                       else breadth["regime"])
+    regime_note = f'{breadth["regime_hint"]} {macro["macro_hint"]}'.strip()
+    det_context = {"regime": combined_regime, "note": regime_note}
 
-    # Per-candidate deterministic signals + neutral-AI projection (pure; spends no tokens).
+    # Per-candidate deterministic signals, fetched in PARALLEL (each network call is
+    # I/O-bound; fetchpool overlaps them so the run stays inside the time budget), then a
+    # neutral-AI projection (pure; spends no tokens).
+    enriched = fetchpool.fetch_map(
+        [s["ticker"] for s in shortlist],
+        lambda t: _enrich_candidate(t, cik_map, sec_window),
+        default=_neutral_bundle,
+    )
     cand_rows = []   # (scored_row, signals, projected_score)
     for s in shortlist:
         ticker = s["ticker"]
+        e = enriched.get(ticker) or _neutral_bundle()
         sigs = {
             "congress": congress_agg.get(ticker),
             "wsb": wsb_map.get(ticker),
-            "analyst": insights.get_analyst_signal(ticker),
-            "insider": insights.get_insider_signal(ticker),
-            "earnings": insights.get_earnings(ticker),
+            "analyst": e["analyst"], "insider": e["insider"], "earnings": e["earnings"],
+            "short": e["short"], "revision": e["revision"],
+            "edgar": e["edgar"], "options": e["options"],
         }
         projected = _projected_score(
             s["score"], det_context, caps,
             congress=sigs["congress"], wsb=sigs["wsb"], analyst=sigs["analyst"],
             insider=sigs["insider"], earnings=sigs["earnings"], thresholds=thr,
+            edgar=sigs["edgar"], options=sigs["options"], short=sigs["short"],
+            revision=sigs["revision"],
         )
         cand_rows.append((s, sigs, projected))
 
@@ -271,7 +322,7 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None) -> R
         client = llm.AnthropicClient()
 
     if use_ai:
-        summary = _build_market_summary(scored) + " " + breadth["regime_hint"]
+        summary = _build_market_summary(scored) + " " + regime_note
         context = agents.context_agent(client, summary)
     else:
         context = det_context
@@ -303,6 +354,8 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None) -> R
             {"ticker": ticker, "score": s["score"]}, nv, rv, context, caps,
             congress=congress_sig, wsb=wsb_sig, social_view=sv,
             analyst=analyst_sig, insider=insider_sig, earnings=earnings_sig, thresholds=thr,
+            edgar=sigs["edgar"], options=sigs["options"], short=sigs["short"],
+            revision=sigs["revision"],
         )
         (vetoed if adjd["vetoed"] else ranked).append(adjd)
     ranked.sort(key=lambda r: r["final_score"], reverse=True)

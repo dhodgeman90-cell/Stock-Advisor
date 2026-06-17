@@ -81,6 +81,29 @@ def _candidate_insight_lines(r) -> list:
     earn = r.get("earnings")
     if earn and earn.get("days_until") is not None:
         lines.append(f"📅 Earnings in {earn['days_until']}d — gap risk for a swing trade")
+    sec = r.get("edgar")
+    if sec:
+        if sec.get("severe"):
+            lines.append(f"📄 SEC 8-K: {sec.get('severe_reason') or 'severe filing'} — elevated risk")
+        elif sec.get("catalyst_types"):
+            lines.append(f"📄 SEC 8-K: {', '.join(sec['catalyst_types'])}")
+        elif sec.get("negative"):
+            lines.append("📄 SEC 8-K: adverse filing")
+        if sec.get("activist"):
+            lines.append("📄 Activist 13D stake filed")
+    opt = r.get("options")
+    if opt and opt.get("direction") in ("bullish", "bearish") and opt.get("pc_ratio") is not None:
+        flow = "call-heavy" if opt["direction"] == "bullish" else "put-heavy"
+        lines.append(f"⚙️ Options flow {flow} (P/C {opt['pc_ratio']:.2f})")
+    sh = r.get("short")
+    if sh and sh.get("pct_float") is not None and sh["pct_float"] >= 20:
+        dtc = sh.get("days_to_cover")
+        dtc_txt = f", {dtc:.1f}d to cover" if dtc is not None else ""
+        lines.append(f"🩳 Short interest {sh['pct_float']:.0f}% of float{dtc_txt}")
+    rev = r.get("revision")
+    if rev and rev.get("revision_trend") in ("up", "down"):
+        arrow = "↑ rising" if rev["revision_trend"] == "up" else "↓ falling"
+        lines.append(f"📈 Analyst estimates {arrow} ({rev.get('n_up', 0)}↑/{rev.get('n_down', 0)}↓)")
     soc = r.get("social")
     if soc:
         lines.append(f"💬 {soc}")

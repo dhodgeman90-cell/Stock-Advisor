@@ -11,3 +11,8 @@ caps:
   analyst: 8          # +/- points from analyst consensus / price-target upside
   earnings_soon: 6    # -points for a new entry with earnings inside the window
   social: 10          # MAX social impact; actually applied = social * trust(0..1)
+  edgar_catalyst: 15  # +/- points from a material 8-K (primary-source catalyst)
+  activist_stake: 12  # +points when an activist 13D stake is filed
+  options_flow: 8     # +/- points from unusual call/put option flow
+  short_squeeze: 10   # +/- points: squeeze setup (corroborated) vs crowded short
+  estimate_revision: 5  # +/- points from analyst estimate-revision momentum

@@ -48,6 +48,10 @@ SIGNAL_DEFAULTS = {
         "congress_large_usd": 50000,   # disclosure size that counts as a "big" trade
         "social_min_mentions": 25,     # WSB mentions below which buzz is ignored
         "earnings_window_days": 5,     # demote new entries with earnings within N days
+        "options_unusual_ratio": 0.5,  # option volume / OI above which flow is "unusual"
+        "options_min_volume": 1000,    # ignore option flow thinner than this
+        "short_high_pct": 20,          # short % of float at/above which squeeze logic applies
+        "sec_window_days": 30,         # how recent an SEC filing must be to count
     },
     "discovery": {
         "congress_lookback_days": 30,  # how recent a disclosure must be to surface
