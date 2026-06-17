@@ -118,6 +118,25 @@ not removed — it is what the conservative/passive user wants.
   save/load; timestamped report storage doesn't clobber and history lists in order;
   default `objective` reproduces current behavior.
 
+## Backtest validation (2026-06-17)
+
+Driving the harness's pure `simulate_ticker` with each preset's applied weights/exits
+over four deterministic synthetic regimes (strong uptrend, choppy-up, sideways,
+downtrend) confirms the slider produces **materially different, monotonic** behavior:
+
+| Preset | Trades | Avg hold (d) | Win rate | Threshold | Trail % |
+|---|---|---|---|---|---|
+| Conservative | 17 | 38 | 53% | 75 | 12 |
+| Balanced | 71 | 9 | 34% | 65 | 6 |
+| Active | 96 | 7 | 30% | 60 | 5 |
+| Aggressive | 131 | 5 | 30% | 55 | 4 |
+
+Trade count rises and average hold falls smoothly from Conservative → Aggressive,
+which is exactly the intended distinction. **These are synthetic, illustrative numbers
+that validate the mechanism — not return forecasts.** A real-data backtest (and paper
+trading) remains the pre-distribution step before trusting magnitudes, consistent with
+the app's own overfitting caveat.
+
 ## Out of scope (future ideas, not this spec)
 
 - Intraday / true day trading (separate data feed + cadence).
