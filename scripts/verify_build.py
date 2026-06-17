@@ -17,12 +17,13 @@ SECRET_MARKERS = (
 )
 # Files that are private regardless of where they sit in the tree.
 FORBIDDEN_FILENAMES = (".env", ".env.bak")
-# Runtime dirs that hold the owner's generated data and must never be bundled.
-FORBIDDEN_DIR_NAMES = ("data", "reports", "logs")
+# Owner dirs that must never be bundled: 'data'/'reports'/'logs' hold generated data,
+# and 'config' is the owner's REAL (non-default) config dir — only 'defaults' may ship.
+FORBIDDEN_DIR_NAMES = ("data", "reports", "logs", "config")
 # Project config files that may ONLY ship as bundled defaults (under a 'defaults' dir).
 CONFIG_BASENAMES = (
-    "watchlist.yaml", "positions.yaml", "exits.yaml", "weights.yaml",
-    "adjudicator.yaml", "signals.yaml", "integrations.yaml",
+    "watchlist.yaml", "watchlist_broad.yaml", "positions.yaml", "exits.yaml",
+    "weights.yaml", "adjudicator.yaml", "signals.yaml", "integrations.yaml",
 )
 # Secret-marker scan covers ONLY these text-ish extensions; .py/.log/.toml/.conf and
 # binary/wheel files are NOT scanned. Secrets-in-binaries (the frozen PYZ) are guarded by

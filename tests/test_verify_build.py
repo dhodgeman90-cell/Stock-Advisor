@@ -72,3 +72,17 @@ def test_nonexistent_dist_dir_is_a_problem_not_clean(tmp_path):
 def test_flags_logs_dir(tmp_path):
     _touch(tmp_path / "_internal" / "logs" / "briefing.log", "nothing secret here")
     assert any("logs" in p for p in find_forbidden(tmp_path))
+
+
+def test_flags_bundled_config_dir(tmp_path):
+    # The owner's real config/ dir (vs bundled defaults/) must never ship.
+    _touch(tmp_path / "_internal" / "config" / "weights.yaml", "weights: {}\n")
+    problems = find_forbidden(tmp_path)
+    assert any("config" in p for p in problems)
+
+
+def test_flags_watchlist_broad_outside_defaults(tmp_path):
+    # watchlist_broad.yaml is an owner config file too — caught outside defaults/.
+    _touch(tmp_path / "_internal" / "stuff" / "watchlist_broad.yaml", "tickers:\n  - XLF\n")
+    problems = find_forbidden(tmp_path)
+    assert any("watchlist_broad.yaml" in p for p in problems)
