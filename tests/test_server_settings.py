@@ -34,3 +34,24 @@ def test_put_settings_empty_tickers_is_400(tmp_path):
     client = _client(tmp_path)
     r = client.put("/api/settings", json={"tickers": [], "settings": {}})
     assert r.status_code == 400
+
+
+def test_objective_default_and_options(tmp_path):
+    client = _client(tmp_path)
+    body = client.get("/api/objective").json()
+    assert body["objective"] == "balanced"
+    keys = [o["key"] for o in body["options"]]
+    assert keys == ["conservative", "balanced", "active", "aggressive"]
+
+
+def test_objective_put_persists(tmp_path):
+    client = _client(tmp_path)
+    r = client.put("/api/objective", json={"objective": "active"})
+    assert r.status_code == 200 and r.json()["objective"] == "active"
+    assert client.get("/api/objective").json()["objective"] == "active"
+
+
+def test_objective_put_garbage_falls_back(tmp_path):
+    client = _client(tmp_path)
+    r = client.put("/api/objective", json={"objective": "nope"})
+    assert r.json()["objective"] == "balanced"
