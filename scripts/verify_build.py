@@ -24,12 +24,16 @@ CONFIG_BASENAMES = (
     "watchlist.yaml", "positions.yaml", "exits.yaml", "weights.yaml",
     "adjudicator.yaml", "signals.yaml", "integrations.yaml",
 )
-# Only scan small text-ish files for secret markers (skip big binaries/wheels).
+# Secret-marker scan covers ONLY these text-ish extensions; .py/.log/.toml/.conf and
+# binary/wheel files are NOT scanned. Secrets-in-binaries (the frozen PYZ) are guarded by
+# design instead: no secret literals live in the source tree, so none can be frozen in.
 TEXT_SUFFIXES = (".env", ".yaml", ".yml", ".json", ".txt", ".cfg", ".ini", ".md")
 
 
-def find_forbidden(dist_dir) -> list[str]:
+def find_forbidden(dist_dir: str | Path) -> list[str]:
     dist = Path(dist_dir)
+    if not dist.is_dir():
+        return [f"dist dir does not exist or is not a directory: {dist_dir}"]
     problems: list[str] = []
     for p in dist.rglob("*"):
         rel = p.relative_to(dist)
@@ -37,10 +41,10 @@ def find_forbidden(dist_dir) -> list[str]:
             if p.name in FORBIDDEN_DIR_NAMES:
                 problems.append(f"private runtime dir bundled: {rel}")
             continue
-        if p.name in FORBIDDEN_FILENAMES:
+        if p.name.lower() in FORBIDDEN_FILENAMES:
             problems.append(f"env/secret file bundled: {rel}")
             continue
-        if p.name in CONFIG_BASENAMES and "defaults" not in rel.parts:
+        if p.name.lower() in CONFIG_BASENAMES and "defaults" not in rel.parts:
             problems.append(f"non-default project config bundled: {rel}")
         if p.suffix.lower() in TEXT_SUFFIXES:
             try:
