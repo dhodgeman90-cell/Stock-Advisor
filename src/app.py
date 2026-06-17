@@ -38,9 +38,17 @@ def main(open_browser: bool = True) -> None:
     app = server.create_app(profile)
     port = find_free_port()
     url = f"http://127.0.0.1:{port}"
-    print(f"Stock Advisor running at {url}  (Ctrl+C to stop)")
+    bar = "=" * 60
+    print(f"\n{bar}\n  Stock Advisor is running at:  {url}\n"
+          f"  If your browser doesn't open, copy that address into it.\n"
+          f"  Keep this window open — press Ctrl+C here to stop.\n{bar}\n")
     if open_browser:
-        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+        def _open() -> None:
+            # webbrowser.open returns False when no handler is found; tell the
+            # user the address instead of leaving them at a silent console.
+            if not webbrowser.open(url):
+                print(f"  Couldn't open a browser automatically — go to {url}")
+        threading.Timer(1.0, _open).start()
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
 
 

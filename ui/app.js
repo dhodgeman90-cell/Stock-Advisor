@@ -4,7 +4,13 @@ const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
 
 async function api(path, opts = {}) {
   const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
-  if (!res.ok) throw new Error(`${path} -> ${res.status}`);
+  if (!res.ok) {
+    // Surface the server's own message (FastAPI puts it in `detail`) so the user
+    // sees "check your app password", not "/api/... -> 502".
+    let detail = "";
+    try { detail = (await res.json()).detail || ""; } catch { /* non-JSON body */ }
+    throw new Error(detail || `${path} -> ${res.status}`);
+  }
   return res.json();
 }
 
