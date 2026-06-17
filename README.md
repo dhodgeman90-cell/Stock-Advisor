@@ -44,6 +44,19 @@ Keys are stored in your operating system's credential manager (Windows Credentia
 Manager / macOS Keychain) — never in a plaintext file, and never shown again after you
 save them.
 
+## Install the app (Windows)
+
+Non-developers can run Stock Advisor without Python:
+1. Run `StockAdvisor-Setup-<version>.exe`. If Windows shows "Windows protected your PC",
+   click **More info -> Run anyway** (the installer is unsigned during the beta).
+2. Launch **Stock Advisor** from the Start Menu (or the desktop shortcut). A small window
+   opens and your browser shows the dashboard. Keep that window open while you use the app;
+   close it to stop.
+3. All your data stays on your machine in `%APPDATA%\StockAdvisor`. Optional AI/email setup
+   lives on the Integrations screen (see "Integrations (optional)" above).
+
+Developers building a release: see `docs/RELEASE.md`.
+
 ## Phase 1 (this build): deterministic core
 
 ### Setup (one time)
