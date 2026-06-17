@@ -19,6 +19,13 @@ NEUTRAL_SOCIAL = {
     "summary": "social agent unavailable",
 }
 
+# Honest fallbacks for when the AI is INTENTIONALLY not run on a candidate (rules-only
+# mode, or a name not projecting as a buy) — distinct from the NEUTRAL_* views above,
+# whose "...agent unavailable" wording is reserved for a genuine agent FAILURE. Same
+# scoring effect (no catalyst, low risk, no veto); only the displayed label differs.
+SKIPPED_NEWS = {**NEUTRAL_NEWS, "summary": "not AI-analyzed (rules-only)"}
+SKIPPED_RISK = {**NEUTRAL_RISK, "reason": "not AI-analyzed (rules-only; no opinion)"}
+
 
 def extract_json(text: str) -> dict:
     """Pull the first {...} JSON object out of a model reply."""

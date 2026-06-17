@@ -51,21 +51,45 @@ def test_discovery_feed_excludes_known_tickers_and_small_or_quiet_names():
     assert [w["ticker"] for w in feed["wsb"]] == ["ZYX"]
 
 
+# Adjudicator caps mirroring config/adjudicator.yaml (for the projection helper tests).
+_CAPS = {
+    "catalyst": 15, "news_negative": 10, "risk_high": 20, "risk_medium": 8,
+    "regime": 5, "congress_buy": 18, "congress_sell": 18, "insider_buy": 12,
+    "insider_sell": 10, "analyst": 8, "earnings_soon": 6, "social": 10,
+}
+_CTX = {"regime": "neutral", "note": ""}
+_THR = {"social_min_mentions": 25, "earnings_window_days": 5}
+
+
+def test_projected_score_lifts_low_base_over_threshold_via_deterministic_boosts():
+    # base 59 + congress buy (+18) + analysts bullish (+8) = 85 >= 65, using NO AI.
+    # This is the score that should decide AI-worthiness (the old gate used base 59).
+    score = main._projected_score(
+        59, _CTX, _CAPS,
+        congress={"net_side": "buy", "n_members": 3},
+        analyst={"rating": "strong_buy", "upside_pct": 16},
+        thresholds=_THR,
+    )
+    assert score == 85
+
+
+def test_projected_score_stays_low_without_boosts():
+    assert main._projected_score(40, _CTX, _CAPS, thresholds=_THR) == 40
+
+
 def test_ai_is_actionable_true_when_holding_has_exit_signal():
     holdings = [{"ticker": "SOXL", "signals": [{"type": "stop_loss"}]}]
-    assert main._ai_is_actionable(holdings, shortlist=[], buy_threshold=65) is True
+    assert main._ai_is_actionable(holdings, projected_scores=[], buy_threshold=65) is True
 
 
-def test_ai_is_actionable_true_when_candidate_clears_buy_threshold():
-    shortlist = [{"ticker": "AAA", "score": 70}]
-    assert main._ai_is_actionable(holdings=[], shortlist=shortlist, buy_threshold=65) is True
+def test_ai_is_actionable_true_when_candidate_projects_as_buy():
+    assert main._ai_is_actionable(holdings=[], projected_scores=[70], buy_threshold=65) is True
 
 
 def test_ai_is_actionable_false_on_a_quiet_day():
-    # No flagged holdings and no candidate clears the buy bar -> no Claude tokens spent.
+    # No flagged holdings and no candidate PROJECTS as a buy -> no Claude tokens spent.
     holdings = [{"ticker": "SOXL", "signals": []}]
-    shortlist = [{"ticker": "AAA", "score": 50}, {"ticker": "BBB", "score": 64}]
-    assert main._ai_is_actionable(holdings, shortlist, buy_threshold=65) is False
+    assert main._ai_is_actionable(holdings, projected_scores=[50, 64], buy_threshold=65) is False
 
 
 import tests.helpers as helpers
@@ -168,3 +192,83 @@ def test_run_routes_signal_caches_to_profile_data_dir(tmp_path, monkeypatch):
 
     assert captured["wsb"] == profile.data_dir / "wsb_sentiment.json"
     assert captured["congress"] == profile.data_dir / "congress_trades.json"
+
+
+def test_run_spends_ai_on_deterministically_boosted_buy_candidate(tmp_path, monkeypatch):
+    """The bug: AI news/risk were gated on the raw BASE score, so a candidate that becomes
+    a buy via deterministic boosts (congress) was skipped and showed 'news agent unavailable'.
+    After the fix, AI runs for any candidate whose deterministic PROJECTION clears the bar."""
+    from src import main
+    from src import llm as llm_mod
+    _seed_min_config(tmp_path / "config")
+    # full caps so the congress-buy boost can apply in the projection + adjudication
+    (tmp_path / "config" / "adjudicator.yaml").write_text(
+        "caps:\n  catalyst: 15\n  news_negative: 10\n  risk_high: 20\n  risk_medium: 8\n"
+        "  regime: 5\n  congress_buy: 18\n  congress_sell: 18\n  insider_buy: 12\n"
+        "  insider_sell: 10\n  analyst: 8\n  earnings_soon: 6\n  social: 10\n",
+        encoding="utf-8")
+
+    # AI "on" but no real API: dummy client + recorded/stubbed agents.
+    monkeypatch.setattr(llm_mod, "AnthropicClient", lambda *a, **k: object())
+    monkeypatch.setattr(main.market, "get_market_breadth",
+                        lambda: {"regime": "neutral", "regime_hint": "VIX calm"})
+    monkeypatch.setattr(main.social, "get_wsb_sentiment", lambda **kw: {})
+    monkeypatch.setattr(main.congress, "get_congress_trades", lambda **kw: [])
+    monkeypatch.setattr(main.congress, "aggregate_by_ticker",
+                        lambda trades: {"AAA": {"net_side": "buy", "n_members": 3}})
+    monkeypatch.setattr(main.insights, "get_insider_signal", lambda t: None)
+    monkeypatch.setattr(main.insights, "get_analyst_signal", lambda t: None)
+    monkeypatch.setattr(main.insights, "get_earnings", lambda t: None)
+    monkeypatch.setattr(main.news, "get_headlines", lambda t: ["a headline"])
+    # AAA's BASE score is 59 -- below buy_threshold 65, but +18 congress projects it to 77.
+    monkeypatch.setattr(main.scoring, "score_ticker",
+                        lambda df, ticker, weights, settings: {
+                            "ticker": ticker, "score": 59, "excluded": False,
+                            "reason": "", "components": {"trend": 1.0}})
+    called = {"news": [], "risk": []}
+    monkeypatch.setattr(main.agents, "news_agent",
+                        lambda client, ticker, headlines: (called["news"].append(ticker)
+                                                           or dict(main.agents.NEUTRAL_NEWS)))
+    monkeypatch.setattr(main.agents, "risk_agent",
+                        lambda client, ticker, closes, headlines: (called["risk"].append(ticker)
+                                                                   or dict(main.agents.NEUTRAL_RISK)))
+    monkeypatch.setattr(main.agents, "context_agent", lambda *a, **k: {"regime": "neutral", "note": "n"})
+
+    profile = Profile(
+        config_dir=tmp_path / "config", data_dir=tmp_path / "data",
+        reports_dir=tmp_path / "reports",
+        secrets=EnvSecrets(values={"ANTHROPIC_API_KEY": "sk-test"}),
+    )
+    fake_fetch = lambda ticker, lookback: helpers.make_df([10 + i * 0.1 for i in range(160)])
+
+    main.run(profile=profile, force=True, fetch=fake_fetch)
+
+    assert "AAA" in called["news"]   # boosted buy candidate got AI news (the fix)
+    assert "AAA" in called["risk"]
+
+
+def test_no_ai_run_labels_candidates_rules_only_not_unavailable(tmp_path, monkeypatch):
+    """With no API key the candidate news/risk should read 'rules-only' (intentional skip),
+    not 'news agent unavailable' (which now signals a genuine agent failure)."""
+    from src import main
+    _seed_min_config(tmp_path / "config")
+    monkeypatch.setattr(main.social, "get_wsb_sentiment", lambda **kw: {})
+    monkeypatch.setattr(main.congress, "get_congress_trades", lambda **kw: [])
+    monkeypatch.setattr(main.congress, "aggregate_by_ticker", lambda trades: {})
+    monkeypatch.setattr(main.market, "get_market_breadth",
+                        lambda: {"regime": "neutral", "regime_hint": "VIX calm"})
+    monkeypatch.setattr(main.insights, "get_insider_signal", lambda t: None)
+    monkeypatch.setattr(main.insights, "get_analyst_signal", lambda t: None)
+    monkeypatch.setattr(main.insights, "get_earnings", lambda t: None)
+    monkeypatch.setattr(main.news, "get_headlines", lambda t: [])
+
+    fake_fetch = lambda ticker, lookback: helpers.make_df([10 + i * 0.1 for i in range(160)])
+    profile = Profile(
+        config_dir=tmp_path / "config", data_dir=tmp_path / "data",
+        reports_dir=tmp_path / "reports", secrets=EnvSecrets(values={}),   # no key -> AI off
+    )
+
+    result = main.run(profile=profile, force=True, fetch=fake_fetch)
+
+    assert "news agent unavailable" not in result.text
+    assert "rules-only" in result.text

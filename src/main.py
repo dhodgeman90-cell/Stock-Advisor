@@ -74,17 +74,36 @@ def _discovery_feed(congress_trades, wsb_map, known_tickers, signals_cfg, today=
     return {"congress": congress_movers, "wsb": wsb_movers}
 
 
-def _ai_is_actionable(holdings, shortlist, buy_threshold) -> bool:
+def _projected_score(base_score, context, caps, *, congress=None, wsb=None,
+                     analyst=None, insider=None, earnings=None, thresholds=None) -> float:
+    """Adjudicated score using ONLY the signals known WITHOUT AI: the base score plus the
+    deterministic congress/insider/analyst/earnings/wsb boosts (AI news/risk/social are
+    fed in NEUTRAL). This is what decides whether a candidate is shaping up as a buy and
+    is therefore worth spending Claude tokens on. Gating on the raw base score alone (the
+    old behaviour) skipped AI for names that clear the bar via those deterministic
+    boosts — exactly the candidates the briefing then recommends.
+    """
+    proj = adjudicator.adjudicate(
+        {"ticker": "_", "score": base_score},
+        dict(agents.NEUTRAL_NEWS), dict(agents.NEUTRAL_RISK), context, caps,
+        congress=congress, wsb=wsb, social_view=dict(agents.NEUTRAL_SOCIAL),
+        analyst=analyst, insider=insider, earnings=earnings, thresholds=thresholds,
+    )
+    return proj["final_score"]
+
+
+def _ai_is_actionable(holdings, projected_scores, buy_threshold) -> bool:
     """Whether today warrants spending Claude tokens.
 
-    True when a holding is already flagging a deterministic exit signal, or a shortlist
-    candidate already scores buy-worthy. On a quiet day (neither) the per-ticker LLM
-    calls are skipped in favour of the deterministic NEUTRAL_* views, so the owner isn't
-    paying Haiku to rubber-stamp 'hold'.
+    True when a holding is already flagging a deterministic exit signal, or any candidate
+    already PROJECTS as a buy on signals known without AI (`projected_scores` = adjudicated
+    scores using neutral AI views; see `_projected_score`). On a quiet day (neither) the
+    per-ticker LLM calls are skipped in favour of the deterministic views, so the owner
+    isn't paying Haiku to rubber-stamp 'hold'.
     """
     if any(h.get("signals") for h in holdings):
         return True
-    return any(s.get("score", 0) >= buy_threshold for s in shortlist)
+    return any(score >= buy_threshold for score in projected_scores)
 
 
 def run(profile: Profile | None = None, force: bool = False, *, fetch=None) -> RunResult:
@@ -207,13 +226,36 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None) -> R
     excluded = [{"ticker": s["ticker"], "reason": s["reason"]}
                 for s in scored if s["excluded"]]
 
-    # Spend Claude tokens only when something is actionable (a flagged holding or a
-    # buy-worthy candidate). On a quiet day, skip the per-ticker LLM calls entirely.
+    # Spend Claude tokens only where it matters. A candidate is worth AI only if it already
+    # PROJECTS as a buy on the signals known WITHOUT AI (base score + deterministic
+    # congress/insider/analyst/earnings/wsb boosts). Gating on the raw base score alone
+    # used to skip AI for names that become buys via those boosts — the exact candidates
+    # the briefing recommends — leaving them labelled "news agent unavailable".
     buy_threshold = exit_rules["backtest"]["buy_threshold"]
+    det_context = {"regime": breadth["regime"], "note": breadth["regime_hint"]}
+
+    # Per-candidate deterministic signals + neutral-AI projection (pure; spends no tokens).
+    cand_rows = []   # (scored_row, signals, projected_score)
+    for s in shortlist:
+        ticker = s["ticker"]
+        sigs = {
+            "congress": congress_agg.get(ticker),
+            "wsb": wsb_map.get(ticker),
+            "analyst": insights.get_analyst_signal(ticker),
+            "insider": insights.get_insider_signal(ticker),
+            "earnings": insights.get_earnings(ticker),
+        }
+        projected = _projected_score(
+            s["score"], det_context, caps,
+            congress=sigs["congress"], wsb=sigs["wsb"], analyst=sigs["analyst"],
+            insider=sigs["insider"], earnings=sigs["earnings"], thresholds=thr,
+        )
+        cand_rows.append((s, sigs, projected))
+
     holdings_actionable = any(h.get("signals") for h in holdings)
-    candidates_actionable = any(s["score"] >= buy_threshold for s in shortlist)
     has_llm = bool(secrets.get("ANTHROPIC_API_KEY"))
-    use_ai = has_llm and _ai_is_actionable(holdings, shortlist, buy_threshold)
+    use_ai = has_llm and _ai_is_actionable(
+        holdings, [p for _, _, p in cand_rows], buy_threshold)
 
     client = None
     if use_ai:
@@ -224,18 +266,15 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None) -> R
         summary = _build_market_summary(scored) + " " + breadth["regime_hint"]
         context = agents.context_agent(client, summary)
     else:
-        context = {"regime": breadth["regime"], "note": breadth["regime_hint"]}
+        context = det_context
 
     ranked, vetoed = [], []
-    for s in shortlist:
+    for s, sigs, projected in cand_rows:
         ticker = s["ticker"]
-        wsb_sig = wsb_map.get(ticker)
-        congress_sig = congress_agg.get(ticker)
-        analyst_sig = insights.get_analyst_signal(ticker)
-        insider_sig = insights.get_insider_signal(ticker)
-        earnings_sig = insights.get_earnings(ticker)
+        congress_sig, wsb_sig = sigs["congress"], sigs["wsb"]
+        analyst_sig, insider_sig, earnings_sig = sigs["analyst"], sigs["insider"], sigs["earnings"]
 
-        if use_ai and candidates_actionable:
+        if use_ai and projected >= buy_threshold:
             headlines = news.get_headlines(ticker)
             recent_closes = list(s["_df"]["Close"].tail(10))
             nv = agents.news_agent(client, ticker, headlines)
@@ -247,7 +286,9 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None) -> R
             else:
                 sv = dict(agents.NEUTRAL_SOCIAL)
         else:
-            nv, rv = dict(agents.NEUTRAL_NEWS), dict(agents.NEUTRAL_RISK)
+            # Intentional skip (rules-only mode, or not projecting as a buy) — honest label,
+            # distinct from a genuine agent failure (NEUTRAL_*). Same scoring effect.
+            nv, rv = dict(agents.SKIPPED_NEWS), dict(agents.SKIPPED_RISK)
             sv = dict(agents.NEUTRAL_SOCIAL)
 
         adjd = adjudicator.adjudicate(
