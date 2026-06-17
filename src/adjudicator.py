@@ -6,14 +6,16 @@ _ANALYST_BEAR = {"sell", "strong_sell", "underperform"}
 
 def adjudicate(candidate: dict, news: dict, risk: dict, context: dict, caps: dict, *,
                congress=None, wsb=None, social_view=None,
-               analyst=None, insider=None, earnings=None, thresholds=None) -> dict:
+               analyst=None, insider=None, earnings=None, thresholds=None,
+               edgar=None, options=None, short=None, revision=None) -> dict:
     """Combine the deterministic score with every signal source. Pure function.
 
     Veto wins absolutely. Every other source contributes a capped, symmetric adjustment;
     the final score is clamped 0-100. New sources (congress, insider, analyst, earnings,
-    r/wallstreetbets) are optional keyword args so the original call sites keep working.
-    Social media is scaled by a situational trust score (trust.social_trust) so it only
-    counts as much as it deserves *in this specific setup*.
+    r/wallstreetbets, SEC EDGAR filings, options flow, short interest, estimate revisions)
+    are optional keyword args so the original call sites keep working. Social media is
+    scaled by a situational trust score (trust.social_trust) so it only counts as much as
+    it deserves *in this specific setup*.
     """
     thresholds = thresholds or {}
     ticker = candidate["ticker"]
@@ -27,6 +29,7 @@ def adjudicate(candidate: dict, news: dict, risk: dict, context: dict, caps: dic
             "news": news, "risk": risk, "regime": regime, "adjustments": [],
             "congress": congress, "social": None, "social_trust": None,
             "analyst": analyst, "insider": insider, "earnings": earnings,
+            "edgar": edgar, "options": options, "short": short, "revision": revision,
         }
 
     final = base
@@ -87,6 +90,63 @@ def adjudicate(candidate: dict, news: dict, risk: dict, context: dict, caps: dic
         final -= caps["earnings_soon"]
         adjustments.append(f"-{caps['earnings_soon']:.0f} earnings in {days}d")
 
+    # ---- SEC EDGAR filings (primary-source catalysts + activist stakes) ----
+    # Additive caps use .get() defaults so an older adjudicator.yaml (predating these
+    # sources) keeps working — same forgiving style as the thresholds above.
+    if edgar:
+        if edgar.get("severe"):
+            sev = caps.get("risk_high", 20)
+            final -= sev
+            adjustments.append(f"-{sev:.0f} SEC: {edgar.get('severe_reason') or 'severe filing'}")
+        if edgar.get("catalyst"):
+            cap = caps.get("edgar_catalyst", 15)
+            final += cap
+            kinds = ", ".join(edgar.get("catalyst_types") or []) or "8-K"
+            adjustments.append(f"+{cap:.0f} SEC 8-K ({kinds})")
+        elif edgar.get("negative"):
+            cap = caps.get("edgar_catalyst", 15)
+            final -= cap
+            adjustments.append(f"-{cap:.0f} SEC 8-K (adverse)")
+        if edgar.get("activist"):
+            cap = caps.get("activist_stake", 12)
+            final += cap
+            adjustments.append(f"+{cap:.0f} activist 13D stake")
+
+    # ---- Options flow (free yfinance chains; only when volume is real & unusual) ----
+    if options:
+        total_vol = (options.get("call_volume") or 0) + (options.get("put_volume") or 0)
+        unusual = (options.get("vol_oi_ratio") or 0) >= thresholds.get("options_unusual_ratio", 0.5)
+        if total_vol >= thresholds.get("options_min_volume", 1000) and unusual:
+            cap = caps.get("options_flow", 8)
+            if options.get("direction") == "bullish":
+                final += cap
+                adjustments.append(f"+{cap:.0f} unusual call flow")
+            elif options.get("direction") == "bearish":
+                final -= cap
+                adjustments.append(f"-{cap:.0f} unusual put flow")
+
+    # ---- Short interest: squeeze setup (corroborated) vs crowded short (weak chart) ----
+    if short and short.get("pct_float") is not None \
+            and short["pct_float"] >= thresholds.get("short_high_pct", 20):
+        cap = caps.get("short_squeeze", 10)
+        wsb_rising = bool(wsb and (wsb.get("mentions_change") or 0) > 0)
+        if base >= 60 or wsb_rising:
+            final += cap
+            adjustments.append(f"+{cap:.0f} squeeze setup ({short['pct_float']:.0f}% short)")
+        else:
+            final -= cap
+            adjustments.append(f"-{cap:.0f} crowded short ({short['pct_float']:.0f}% short)")
+
+    # ---- Analyst estimate-revision momentum (drift beats a static rating) ----
+    if revision:
+        cap = caps.get("estimate_revision", 5)
+        if revision.get("revision_trend") == "up":
+            final += cap
+            adjustments.append(f"+{cap:.0f} estimates rising")
+        elif revision.get("revision_trend") == "down":
+            final -= cap
+            adjustments.append(f"-{cap:.0f} estimates falling")
+
     # ---- r/wallstreetbets, scaled by situational trust ----
     social_trust = None
     social_summary = None
@@ -115,4 +175,5 @@ def adjudicate(candidate: dict, news: dict, risk: dict, context: dict, caps: dic
         "news": news, "risk": risk, "regime": regime, "adjustments": adjustments,
         "congress": congress, "social": social_summary, "social_trust": social_trust,
         "analyst": analyst, "insider": insider, "earnings": earnings,
+        "edgar": edgar, "options": options, "short": short, "revision": revision,
     }

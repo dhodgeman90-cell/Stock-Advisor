@@ -11,6 +11,8 @@ NEUTRAL_ANALYST = {"rating": None, "mean": None, "target": None,
 NEUTRAL_INSIDER = {"net_side": None, "n_buys": 0, "n_sells": 0,
                    "buy_value": 0.0, "sell_value": 0.0}
 NEUTRAL_EARNINGS = {"next_earnings": None, "days_until": None}
+NEUTRAL_SHORT = {"pct_float": None, "days_to_cover": None,
+                 "shares_short": None, "rising": None}
 
 
 # --- analyst ratings / price targets --------------------------------------
@@ -118,3 +120,87 @@ def get_earnings(ticker, fetch=_default_earnings_fetch) -> dict:
         return _parse_earnings(fetch(ticker))
     except Exception:
         return dict(NEUTRAL_EARNINGS)
+
+
+# --- short interest / squeeze setup ---------------------------------------
+def _parse_short(info):
+    """Short-interest read from yfinance .info (already a free field — no new source).
+
+    `shortPercentOfFloat` is a 0-1 fraction (0.1439 = 14.39%); we surface it as a
+    percent. `shortRatio` is days-to-cover. `rising` compares this month's short shares
+    to the prior month so the adjudicator can tell a building short from a covering one.
+    """
+    pct = info.get("shortPercentOfFloat")
+    pct_float = float(pct) * 100.0 if pct is not None else None
+    shares = info.get("sharesShort")
+    prior = info.get("sharesShortPriorMonth")
+    rising = None
+    if shares is not None and prior is not None:
+        rising = float(shares) > float(prior)
+    dtc = info.get("shortRatio")
+    return {
+        "pct_float": round(pct_float, 2) if pct_float is not None else None,
+        "days_to_cover": float(dtc) if dtc is not None else None,
+        "shares_short": int(shares) if shares is not None else None,
+        "rising": rising,
+    }
+
+
+def get_short_signal(ticker, fetch=_default_analyst_fetch) -> dict:
+    """Short-interest signal for one ticker; no-opinion default on any failure.
+
+    ponytail: reuses the analyst .info fetch (same endpoint) — short interest is just
+    more fields on the same payload, so no extra source and no extra network shape.
+    """
+    try:
+        info, _ = fetch(ticker)
+        return _parse_short(info or {})
+    except Exception:
+        return dict(NEUTRAL_SHORT)
+
+
+# --- analyst estimate-revision momentum -----------------------------------
+NEUTRAL_REVISION = {"revision_trend": "flat", "n_up": 0, "n_down": 0}
+
+
+def _parse_revisions(records, today=None, window_days=90):
+    """Net analyst revision direction over a recent window (pure, testable).
+
+    A *static* consensus rating misses the momentum that actually moves stocks: the
+    drift of upgrades/downgrades and price-target raises/cuts. We tally both signals
+    (rating action + price-target action) inside the window and net them.
+    """
+    today = today or dt.date.today()
+    cutoff = today - dt.timedelta(days=window_days)
+    n_up = n_down = 0
+    for r in records:
+        d = _coerce_date(r.get("GradeDate"))
+        if d is None or d < cutoff:
+            continue
+        action = str(r.get("Action") or "").lower()
+        pta = str(r.get("priceTargetAction") or "").lower()
+        if action == "up" or pta.startswith("rais"):
+            n_up += 1
+        elif action == "down" or pta.startswith("low"):
+            n_down += 1
+    trend = "flat"
+    if n_up > n_down and n_up >= 2:
+        trend = "up"
+    elif n_down > n_up and n_down >= 2:
+        trend = "down"
+    return {"revision_trend": trend, "n_up": n_up, "n_down": n_down}
+
+
+def _default_revision_fetch(ticker):
+    import yfinance as yf
+    df = yf.Ticker(ticker).upgrades_downgrades
+    if df is None or getattr(df, "empty", True):
+        return []
+    return df.reset_index().to_dict("records")
+
+
+def get_revision_signal(ticker, fetch=_default_revision_fetch) -> dict:
+    try:
+        return _parse_revisions(fetch(ticker) or [])
+    except Exception:
+        return dict(NEUTRAL_REVISION)

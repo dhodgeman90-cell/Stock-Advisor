@@ -38,8 +38,11 @@ def test_negative_news_and_risk_off():
 
 # ---- new signal sources (congress, insider, analyst, earnings, social) ----
 EXT_CAPS = {**CAPS, "congress_buy": 18, "congress_sell": 18, "social": 10,
-            "analyst": 8, "insider_buy": 12, "insider_sell": 10, "earnings_soon": 6}
-THRESH = {"social_min_mentions": 25, "earnings_window_days": 5}
+            "analyst": 8, "insider_buy": 12, "insider_sell": 10, "earnings_soon": 6,
+            "edgar_catalyst": 15, "activist_stake": 12, "options_flow": 8,
+            "short_squeeze": 10, "estimate_revision": 5}
+THRESH = {"social_min_mentions": 25, "earnings_window_days": 5,
+          "options_min_volume": 1000, "options_unusual_ratio": 0.5, "short_high_pct": 20}
 
 
 def _adj(score, **kw):
@@ -93,6 +96,74 @@ def test_social_skipped_below_min_mentions():
     wsb = {"mentions": 10, "mentions_change": 50, "rank_change": 3}
     out = _adj(60, wsb=wsb, social_view={"credibility": "high", "contrarian": False})
     assert out["final_score"] == 60        # not enough buzz to count
+
+
+# ---- SEC EDGAR / options / short / estimate revisions ----
+def test_edgar_catalyst_boosts():
+    out = _adj(60, edgar={"catalyst": True, "catalyst_types": ["reported earnings"],
+                          "severe": False, "negative": False, "activist": False})
+    assert out["final_score"] == 75       # 60 + 15
+
+
+def test_edgar_severe_penalizes_like_high_risk():
+    out = _adj(60, edgar={"catalyst": False, "severe": True, "severe_reason": "delisting notice",
+                          "negative": False, "activist": False})
+    assert out["final_score"] == 40       # 60 - 20 (risk_high cap)
+
+
+def test_edgar_activist_stacks_on_catalyst():
+    out = _adj(50, edgar={"catalyst": True, "catalyst_types": ["entered a material agreement"],
+                          "severe": False, "negative": False, "activist": True})
+    assert out["final_score"] == 77       # 50 + 15 + 12
+
+
+def test_options_bullish_flow_only_when_unusual_and_liquid():
+    bull = {"direction": "bullish", "pc_ratio": 0.2, "call_volume": 2000,
+            "put_volume": 100, "vol_oi_ratio": 1.2}
+    assert _adj(60, options=bull)["final_score"] == 68        # 60 + 8
+    thin = {**bull, "call_volume": 100, "put_volume": 10}      # below min_volume
+    assert _adj(60, options=thin)["final_score"] == 60        # ignored
+
+
+def test_options_bearish_flow_penalizes():
+    bear = {"direction": "bearish", "pc_ratio": 2.5, "call_volume": 200,
+            "put_volume": 2000, "vol_oi_ratio": 0.9}
+    assert _adj(60, options=bear)["final_score"] == 52        # 60 - 8
+
+
+def test_short_squeeze_bonus_with_strong_chart():
+    out = _adj(65, short={"pct_float": 25.0, "days_to_cover": 6.0})
+    assert out["final_score"] == 75       # base>=60 -> squeeze setup +10
+
+
+def test_short_crowded_penalty_on_weak_chart():
+    out = _adj(40, short={"pct_float": 25.0, "days_to_cover": 6.0})
+    assert out["final_score"] == 30       # weak chart, no buzz -> crowded short -10
+
+
+def test_short_squeeze_uses_wsb_corroboration():
+    out = _adj(40, short={"pct_float": 30.0}, wsb={"mentions": 5, "mentions_change": 80})
+    assert out["final_score"] == 50       # weak chart but WSB rising -> squeeze +10
+
+
+def test_low_short_interest_ignored():
+    out = _adj(60, short={"pct_float": 5.0, "days_to_cover": 1.0})
+    assert out["final_score"] == 60
+
+
+def test_estimate_revision_up_and_down():
+    assert _adj(60, revision={"revision_trend": "up", "n_up": 3, "n_down": 0})["final_score"] == 65
+    assert _adj(60, revision={"revision_trend": "down", "n_up": 0, "n_down": 3})["final_score"] == 55
+    assert _adj(60, revision={"revision_trend": "flat", "n_up": 1, "n_down": 1})["final_score"] == 60
+
+
+def test_veto_wins_over_edgar_catalyst():
+    risk = {"risk_level": "high", "red_flags": [], "veto": True, "reason": "fraud"}
+    out = adjudicator.adjudicate(
+        {"ticker": "X", "score": 70}, NEUTRAL_NEWS, risk, NEUTRAL_CTX, EXT_CAPS,
+        thresholds=THRESH, edgar={"catalyst": True, "catalyst_types": ["x"]},
+    )
+    assert out["vetoed"] is True and out["final_score"] == 70
 
 
 def test_veto_wins_over_congress_buy():

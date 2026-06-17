@@ -2,7 +2,8 @@ import datetime as dt
 
 import pandas as pd
 
-from src import main, config, scoring, onboarding, broker, social, congress, market, insights
+from src import (main, config, scoring, onboarding, broker, social, congress,
+                 market, insights, edgar, options)
 from src.profile import Profile
 
 
@@ -120,6 +121,18 @@ def _seed_min_config(cfg):
     (cfg / "positions.yaml").write_text("positions: []\n", encoding="utf-8")
 
 
+def _stub_signal_feeds(monkeypatch):
+    """Neutralize the per-candidate + macro network feeds added for deep sourcing, so the
+    older run-tests (which stub the original feeds by hand) stay fully offline."""
+    monkeypatch.setattr(main.market, "get_macro_context",
+                        lambda *a, **k: dict(main.market.NEUTRAL_MACRO))
+    monkeypatch.setattr(main.insights, "get_short_signal", lambda t: None)
+    monkeypatch.setattr(main.insights, "get_revision_signal", lambda t: None)
+    monkeypatch.setattr(main.edgar, "load_cik_map", lambda **kw: {})
+    monkeypatch.setattr(main.edgar, "get_sec_signal", lambda t, cik_map, **kw: None)
+    monkeypatch.setattr(main.options, "get_options_signal", lambda t: None)
+
+
 def test_run_honors_profile_dirs_and_returns_result(tmp_path, monkeypatch):
     from src import main
     _seed_min_config(tmp_path / "config")
@@ -134,6 +147,7 @@ def test_run_honors_profile_dirs_and_returns_result(tmp_path, monkeypatch):
     monkeypatch.setattr(main.insights, "get_insider_signal", lambda t: None)
     monkeypatch.setattr(main.insights, "get_analyst_signal", lambda t: None)
     monkeypatch.setattr(main.insights, "get_earnings", lambda t: None)
+    _stub_signal_feeds(monkeypatch)
     monkeypatch.setattr(main.news, "get_headlines", lambda t: [])
 
     prices = [10 + i * 0.1 for i in range(160)]   # clean rising series
@@ -181,6 +195,7 @@ def test_run_routes_signal_caches_to_profile_data_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(main.insights, "get_insider_signal", lambda t: None)
     monkeypatch.setattr(main.insights, "get_analyst_signal", lambda t: None)
     monkeypatch.setattr(main.insights, "get_earnings", lambda t: None)
+    _stub_signal_feeds(monkeypatch)
     monkeypatch.setattr(main.news, "get_headlines", lambda t: [])
 
     fake_fetch = lambda ticker, lookback: helpers.make_df([10 + i * 0.1 for i in range(160)])
@@ -222,6 +237,7 @@ def test_run_spends_ai_on_deterministically_boosted_buy_candidate(tmp_path, monk
     monkeypatch.setattr(main.insights, "get_insider_signal", lambda t: None)
     monkeypatch.setattr(main.insights, "get_analyst_signal", lambda t: None)
     monkeypatch.setattr(main.insights, "get_earnings", lambda t: None)
+    _stub_signal_feeds(monkeypatch)
     monkeypatch.setattr(main.news, "get_headlines", lambda t: ["a headline"])
     # AAA's BASE score is 59 -- below buy_threshold 65, but +18 congress projects it to 77.
     monkeypatch.setattr(main.scoring, "score_ticker",
@@ -263,6 +279,7 @@ def test_no_ai_run_labels_candidates_rules_only_not_unavailable(tmp_path, monkey
     monkeypatch.setattr(main.insights, "get_insider_signal", lambda t: None)
     monkeypatch.setattr(main.insights, "get_analyst_signal", lambda t: None)
     monkeypatch.setattr(main.insights, "get_earnings", lambda t: None)
+    _stub_signal_feeds(monkeypatch)
     monkeypatch.setattr(main.news, "get_headlines", lambda t: [])
 
     fake_fetch = lambda ticker, lookback: helpers.make_df([10 + i * 0.1 for i in range(160)])
@@ -308,9 +325,15 @@ def _stub_feeds(monkeypatch):
     monkeypatch.setattr(congress, "get_congress_trades", lambda **kw: [])
     monkeypatch.setattr(congress, "aggregate_by_ticker", lambda trades: {})
     monkeypatch.setattr(market, "get_market_breadth", lambda *a, **k: dict(market.NEUTRAL_BREADTH))
+    monkeypatch.setattr(market, "get_macro_context", lambda *a, **k: dict(market.NEUTRAL_MACRO))
     monkeypatch.setattr(insights, "get_insider_signal", lambda ticker: None)
     monkeypatch.setattr(insights, "get_analyst_signal", lambda ticker: None)
     monkeypatch.setattr(insights, "get_earnings", lambda ticker: None)
+    monkeypatch.setattr(insights, "get_short_signal", lambda ticker: None)
+    monkeypatch.setattr(insights, "get_revision_signal", lambda ticker: None)
+    monkeypatch.setattr(edgar, "load_cik_map", lambda **kw: {})
+    monkeypatch.setattr(edgar, "get_sec_signal", lambda ticker, cik_map, **kw: None)
+    monkeypatch.setattr(options, "get_options_signal", lambda ticker: None)
 
 
 def test_objective_changes_effective_weights(tmp_path, monkeypatch):

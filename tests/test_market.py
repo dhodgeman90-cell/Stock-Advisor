@@ -42,3 +42,39 @@ def test_get_market_breadth_falls_back_on_error():
         raise RuntimeError("yf down")
     out = market.get_market_breadth(fetch=boom)
     assert out["regime"] == "neutral"
+
+
+# --- macro overlay: yield curve + credit spread ----------------------------
+def test_assess_macro_normal_is_neutral():
+    out = market._assess_macro(curve=0.82, hy_spread=2.7)
+    assert out["macro_regime"] == "neutral"
+    assert out["yield_curve"] == 0.82
+
+
+def test_assess_macro_inverted_curve_is_risk_off():
+    out = market._assess_macro(curve=-0.3, hy_spread=3.0)
+    assert out["macro_regime"] == "risk_off"
+    assert "inverted" in out["macro_hint"]
+
+
+def test_assess_macro_credit_stress_is_risk_off():
+    out = market._assess_macro(curve=1.0, hy_spread=6.5)
+    assert out["macro_regime"] == "risk_off"
+    assert "credit spread" in out["macro_hint"]
+
+
+def test_assess_macro_missing_data_is_neutral():
+    out = market._assess_macro(curve=None, hy_spread=None)
+    assert out["macro_regime"] == "neutral"
+
+
+def test_get_macro_context_uses_injected_fetch():
+    out = market.get_macro_context(fetch=lambda: {"curve": -0.5, "hy_spread": 3.0})
+    assert out["macro_regime"] == "risk_off"
+
+
+def test_get_macro_context_falls_back_on_error():
+    def boom():
+        raise RuntimeError("down")
+    out = market.get_macro_context(fetch=boom)
+    assert out["macro_regime"] == "neutral"

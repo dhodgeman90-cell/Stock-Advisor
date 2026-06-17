@@ -76,3 +76,81 @@ def test_parse_earnings_picks_soonest_future_date():
 def test_parse_earnings_none_when_no_date():
     out = insights._parse_earnings({}, today=dt.date(2026, 6, 13))
     assert out["days_until"] is None
+
+
+# --- short interest / squeeze ---------------------------------------------
+def test_parse_short_converts_float_pct_and_rising():
+    info = {"shortPercentOfFloat": 0.1439, "shortRatio": 6.22,
+            "sharesShort": 59_000_000, "sharesShortPriorMonth": 50_000_000}
+    out = insights._parse_short(info)
+    assert out["pct_float"] == 14.39
+    assert out["days_to_cover"] == 6.22
+    assert out["rising"] is True
+
+
+def test_parse_short_falling_short_interest():
+    info = {"shortPercentOfFloat": 0.05, "sharesShort": 40, "sharesShortPriorMonth": 60}
+    out = insights._parse_short(info)
+    assert out["rising"] is False
+
+
+def test_parse_short_missing_fields_are_none():
+    out = insights._parse_short({})
+    assert out["pct_float"] is None and out["rising"] is None
+
+
+def test_get_short_signal_uses_injected_fetch():
+    out = insights.get_short_signal(
+        "GME", fetch=lambda t: ({"shortPercentOfFloat": 0.2, "shortRatio": 5.0,
+                                 "sharesShort": 10, "sharesShortPriorMonth": 5}, 30.0))
+    assert out["pct_float"] == 20.0 and out["rising"] is True
+
+
+def test_get_short_signal_falls_back_on_error():
+    def boom(t):
+        raise RuntimeError("yf down")
+    out = insights.get_short_signal("GME", fetch=boom)
+    assert out == insights.NEUTRAL_SHORT
+
+
+# --- analyst estimate-revision momentum -----------------------------------
+def test_parse_revisions_up_trend():
+    recs = [
+        {"GradeDate": dt.date(2026, 6, 10), "Action": "up", "priceTargetAction": "Raises"},
+        {"GradeDate": dt.date(2026, 6, 5), "Action": "main", "priceTargetAction": "Raises"},
+        {"GradeDate": dt.date(2026, 6, 1), "Action": "down", "priceTargetAction": "Lowers"},
+    ]
+    out = insights._parse_revisions(recs, today=dt.date(2026, 6, 17))
+    assert out["n_up"] == 2 and out["n_down"] == 1
+    assert out["revision_trend"] == "up"
+
+
+def test_parse_revisions_down_trend():
+    recs = [
+        {"GradeDate": dt.date(2026, 6, 10), "Action": "down", "priceTargetAction": "Lowers"},
+        {"GradeDate": dt.date(2026, 6, 9), "Action": "main", "priceTargetAction": "Lowers"},
+    ]
+    out = insights._parse_revisions(recs, today=dt.date(2026, 6, 17))
+    assert out["revision_trend"] == "down"
+
+
+def test_parse_revisions_window_excludes_old():
+    recs = [
+        {"GradeDate": dt.date(2026, 1, 1), "Action": "up", "priceTargetAction": "Raises"},
+        {"GradeDate": dt.date(2026, 1, 2), "Action": "up", "priceTargetAction": "Raises"},
+    ]
+    out = insights._parse_revisions(recs, today=dt.date(2026, 6, 17), window_days=90)
+    assert out["revision_trend"] == "flat" and out["n_up"] == 0
+
+
+def test_parse_revisions_single_action_is_flat():
+    recs = [{"GradeDate": dt.date(2026, 6, 10), "Action": "up", "priceTargetAction": "Raises"}]
+    out = insights._parse_revisions(recs, today=dt.date(2026, 6, 17))
+    assert out["revision_trend"] == "flat"        # needs >=2 to call a trend
+
+
+def test_get_revision_signal_falls_back_on_error():
+    def boom(t):
+        raise RuntimeError("yf down")
+    out = insights.get_revision_signal("AAPL", fetch=boom)
+    assert out == insights.NEUTRAL_REVISION

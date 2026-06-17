@@ -11,3 +11,8 @@ caps:
   analyst: 8
   earnings_soon: 6
   social: 10
+  edgar_catalyst: 15
+  activist_stake: 12
+  options_flow: 8
+  short_squeeze: 10
+  estimate_revision: 5
