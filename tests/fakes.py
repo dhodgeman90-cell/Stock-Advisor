@@ -31,9 +31,11 @@ class _FakeAccountInfo:
     def list_user_accounts(self, user_id=None, user_secret=None):
         return _Resp(list(self._accounts))
 
-    def get_user_holdings(self, user_id=None, user_secret=None, account_id=None):
+    def get_user_account_positions(self, user_id=None, user_secret=None, account_id=None):
+        # Mirrors the real endpoint broker.py uses: body IS the positions list (see the
+        # NOTE in broker._default_list_positions on why get_user_holdings is avoided).
         self.positions_calls.append(account_id)
-        return _Resp({"positions": list(self._positions_by_account.get(account_id, []))})
+        return _Resp(list(self._positions_by_account.get(account_id, [])))
 
 
 class _FakeAuth:
