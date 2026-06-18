@@ -9,7 +9,8 @@ None if no backend is available, so a missing credential store never crashes a r
 from __future__ import annotations
 
 SERVICE = "StockAdvisor"
-SECRET_KEYS = ("ANTHROPIC_API_KEY", "EMAIL_PASSWORD")
+SECRET_KEYS = ("ANTHROPIC_API_KEY", "EMAIL_PASSWORD",
+               "SNAPTRADE_CONSUMER_KEY", "SNAPTRADE_USER_SECRET")
 
 _backend = None
 

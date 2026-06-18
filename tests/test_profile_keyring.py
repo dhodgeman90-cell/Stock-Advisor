@@ -110,3 +110,25 @@ def test_for_repo_apply_is_unchanged_setdefault(tmp_path, monkeypatch):
     s.apply_to_environ()
     assert os.environ["OWNER_VAR"] == "ambient"   # setdefault did NOT clobber
     assert os.environ["OTHER"] == "x"
+
+
+def test_profile_exports_all_snaptrade_creds_to_environ(tmp_path, monkeypatch):
+    from src import config, secrets_store
+    from src.profile import Profile
+    for k in ("SNAPTRADE_CLIENT_ID", "SNAPTRADE_CONSUMER_KEY",
+              "SNAPTRADE_USER_ID", "SNAPTRADE_USER_SECRET"):
+        monkeypatch.delenv(k, raising=False)
+    profile = Profile.for_base(tmp_path)
+    config.save_brokerage_identity(profile.config_dir, client_id="cid", user_id="uid")
+    secrets_store.set_secret("SNAPTRADE_CONSUMER_KEY", "ckey")
+    secrets_store.set_secret("SNAPTRADE_USER_SECRET", "usecret")
+    # rebuild so the config layer picks up the freshly written integrations.yaml
+    profile = Profile.for_base(tmp_path)
+    profile.secrets.apply_to_environ()
+    import os
+    from src import broker
+    assert os.environ["SNAPTRADE_CLIENT_ID"] == "cid"
+    assert os.environ["SNAPTRADE_CONSUMER_KEY"] == "ckey"
+    assert os.environ["SNAPTRADE_USER_ID"] == "uid"
+    assert os.environ["SNAPTRADE_USER_SECRET"] == "usecret"
+    assert broker.is_configured() is True

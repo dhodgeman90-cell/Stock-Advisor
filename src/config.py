@@ -212,35 +212,76 @@ def save_positions(config_dir, positions) -> None:
     _atomic_write_yaml(Path(config_dir) / "positions.yaml", {"positions": out})
 
 
-INTEGRATION_FIELDS = ("EMAIL_USER", "EMAIL_TO", "EMAIL_HOST", "EMAIL_PORT")
+INTEGRATION_FIELDS = ("EMAIL_USER", "EMAIL_TO", "EMAIL_HOST", "EMAIL_PORT",
+                      "SNAPTRADE_CLIENT_ID", "SNAPTRADE_USER_ID")
 
 
-def load_integrations(config_dir) -> dict:
-    """Non-secret email routing config from integrations.yaml, keyed by env-var name.
-
-    Secrets (the Anthropic key, the email app password) are NOT here — those live in
-    the OS credential store (see src/secrets_store.py). A missing/blank file yields {}.
-    """
+def _read_integrations_raw(config_dir) -> dict:
     path = Path(config_dir) / "integrations.yaml"
     if not path.exists():
         return {}
     with open(path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-    email = data.get("email") or {}
+        return yaml.safe_load(f) or {}
+
+
+def load_integrations(config_dir) -> dict:
+    """Non-secret integration config from integrations.yaml, keyed by env-var name.
+
+    Secrets (Anthropic key, email app password, SnapTrade consumer key/user secret) are
+    NOT here — those live in the OS credential store (see src/secrets_store.py). A
+    missing/blank file yields {}.
+    """
+    data = _read_integrations_raw(config_dir)
     out = {}
+    email = data.get("email") or {}
     for env_key, yaml_key in (("EMAIL_USER", "user"), ("EMAIL_TO", "to"),
                               ("EMAIL_HOST", "host"), ("EMAIL_PORT", "port")):
         val = email.get(yaml_key)
         if val is not None and str(val).strip() != "":
             out[env_key] = str(val).strip()
+    brokerage = data.get("brokerage") or {}
+    for env_key, yaml_key in (("SNAPTRADE_CLIENT_ID", "client_id"),
+                              ("SNAPTRADE_USER_ID", "user_id")):
+        val = brokerage.get(yaml_key)
+        if val is not None and str(val).strip() != "":
+            out[env_key] = str(val).strip()
     return out
 
 
+def _write_integration_section(config_dir, section: str, mapping: dict) -> None:
+    """Merge `mapping` into one section of integrations.yaml, preserving other sections.
+
+    A value of None means "leave unchanged"; "" (or blank) means "clear that field";
+    any other value is set (stringified + trimmed). Blank fields are never written as
+    empty strings, which the engine would misread as 'configured'.
+    """
+    data = _read_integrations_raw(config_dir)
+    sect = dict(data.get(section) or {})
+    for key, val in mapping.items():
+        if val is None:
+            continue
+        sval = str(val).strip()
+        if sval == "":
+            sect.pop(key, None)
+        else:
+            sect[key] = sval
+    if sect:
+        data[section] = sect
+    else:
+        data.pop(section, None)
+    _atomic_write_yaml(Path(config_dir) / "integrations.yaml", data)
+
+
 def save_integrations(config_dir, *, user="", to="", host="", port="") -> None:
-    """Persist non-secret email config to integrations.yaml. Blank fields are omitted
-    (never written as empty strings, which the engine would misread as 'configured')."""
-    email = {}
-    for yaml_key, val in (("user", user), ("to", to), ("host", host), ("port", port)):
-        if val is not None and str(val).strip() != "":
-            email[yaml_key] = str(val).strip()
-    _atomic_write_yaml(Path(config_dir) / "integrations.yaml", {"email": email})
+    """Persist non-secret email config to the 'email' section of integrations.yaml."""
+    _write_integration_section(config_dir, "email",
+                               {"user": user, "to": to, "host": host, "port": port})
+
+
+def save_brokerage_identity(config_dir, *, client_id=None, user_id=None) -> None:
+    """Persist the non-secret SnapTrade identifiers to the 'brokerage' section.
+
+    Pass None to leave a field unchanged, "" to clear it. The secret consumer key and
+    user secret are stored separately in the OS keyring, not here."""
+    _write_integration_section(config_dir, "brokerage",
+                               {"client_id": client_id, "user_id": user_id})
