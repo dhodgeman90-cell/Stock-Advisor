@@ -1,7 +1,7 @@
 """Thin wrapper over the OS credential store (via the `keyring` library).
 
 On Windows this is the Credential Manager (DPAPI-backed) — no extra install.
-The per-user app stores exactly two secrets here (SECRET_KEYS); everything else
+The per-user app stores a small set of secrets here (SECRET_KEYS); everything else
 is non-secret config. The backend is swappable (set_backend) so tests use an
 in-memory fake and never touch the real credential store. All reads degrade to
 None if no backend is available, so a missing credential store never crashes a run.
