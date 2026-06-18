@@ -31,16 +31,32 @@ class _FakeAccountInfo:
     def list_user_accounts(self, user_id=None, user_secret=None):
         return _Resp(list(self._accounts))
 
-    def get_user_account_positions(self, user_id=None, user_secret=None, account_id=None):
+    def get_user_holdings(self, user_id=None, user_secret=None, account_id=None):
         self.positions_calls.append(account_id)
-        return _Resp(list(self._positions_by_account.get(account_id, [])))
+        return _Resp({"positions": list(self._positions_by_account.get(account_id, []))})
+
+
+class _FakeAuth:
+    def __init__(self, user_secret="usecret", redirect_uri="https://app.snaptrade.com/portal"):
+        self._user_secret = user_secret
+        self._redirect_uri = redirect_uri
+        self.registered = []   # user_ids passed to register, in order
+
+    def register_snap_trade_user(self, user_id=None):
+        self.registered.append(user_id)
+        return _Resp({"userId": user_id, "userSecret": self._user_secret})
+
+    def login_snap_trade_user(self, user_id=None, user_secret=None):
+        return _Resp({"redirectURI": self._redirect_uri})
 
 
 class FakeSnapTrade:
-    """Minimal SnapTrade SDK stand-in serving canned accounts + positions."""
+    """Minimal SnapTrade SDK stand-in serving canned accounts, holdings, and auth."""
 
-    def __init__(self, accounts, positions_by_account):
-        self.account_information = _FakeAccountInfo(accounts, positions_by_account)
+    def __init__(self, accounts=None, positions_by_account=None,
+                 user_secret="usecret", redirect_uri="https://app.snaptrade.com/portal"):
+        self.account_information = _FakeAccountInfo(accounts or [], positions_by_account or {})
+        self.authentication = _FakeAuth(user_secret, redirect_uri)
 
 
 def snaptrade_position(ticker, units, average_purchase_price, price=None):
