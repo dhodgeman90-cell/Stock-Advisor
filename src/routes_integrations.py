@@ -13,7 +13,7 @@ from typing import Optional
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 
-from src import config, secrets_store, briefing
+from src import config, secrets_store, briefing, brokerage_link
 from src.deps import get_profile
 
 logger = logging.getLogger(__name__)
@@ -31,6 +31,11 @@ class EmailBody(BaseModel):
     password: Optional[str] = None   # None = leave existing; "" = clear; value = set
 
 
+class BrokerageKeysBody(BaseModel):
+    client_id: str = ""
+    consumer_key: str = ""      # "" clears the stored consumer key
+
+
 def register(app) -> None:
     @app.get("/api/integrations")
     def get_integrations(profile=Depends(get_profile)):
@@ -43,6 +48,11 @@ def register(app) -> None:
                 "host": ic.get("EMAIL_HOST", "smtp.gmail.com"),
                 "port": ic.get("EMAIL_PORT", "465"),
                 "password_set": secrets_store.has_secret("EMAIL_PASSWORD"),
+            },
+            "brokerage": {
+                "client_id": ic.get("SNAPTRADE_CLIENT_ID", ""),
+                "keys_set": brokerage_link.keys_present(profile.config_dir),
+                "linked": brokerage_link.is_linked(profile.config_dir),
             },
         }
 
@@ -97,4 +107,33 @@ def register(app) -> None:
                 status_code=502,
                 detail="Send failed — check your email address, SMTP host/port, and app password.",
             ) from e
+        return {"ok": True}
+
+    @app.put("/api/integrations/brokerage/keys")
+    def put_brokerage_keys(body: BrokerageKeysBody, profile=Depends(get_profile)):
+        brokerage_link.save_keys(profile.config_dir, body.client_id, body.consumer_key)
+        # Refresh the live profile so a connect/run in this session sees the new keys.
+        profile.secrets.update_config_values(config.load_integrations(profile.config_dir))
+        return {"ok": True, "keys_set": brokerage_link.keys_present(profile.config_dir)}
+
+    @app.post("/api/integrations/brokerage/connect")
+    def connect_brokerage(profile=Depends(get_profile)):
+        try:
+            url = brokerage_link.start_connect(profile.config_dir)
+        except brokerage_link.BrokerageError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        profile.secrets.update_config_values(config.load_integrations(profile.config_dir))
+        return {"redirect_url": url}
+
+    @app.post("/api/integrations/brokerage/verify")
+    def verify_brokerage(profile=Depends(get_profile)):
+        try:
+            return brokerage_link.check_connection(profile.config_dir)
+        except brokerage_link.BrokerageError as e:
+            raise HTTPException(status_code=502, detail=str(e)) from e
+
+    @app.post("/api/integrations/brokerage/disconnect")
+    def disconnect_brokerage(profile=Depends(get_profile)):
+        brokerage_link.disconnect(profile.config_dir)
+        profile.secrets.update_config_values(config.load_integrations(profile.config_dir))
         return {"ok": True}
