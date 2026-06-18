@@ -1,5 +1,8 @@
+import shutil
+import subprocess
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from src import server, onboarding
@@ -53,3 +56,15 @@ def test_app_js_wires_brokerage_endpoints():
     assert "/api/integrations/brokerage/connect" in js
     assert "/api/integrations/brokerage/verify" in js
     assert "/api/integrations/brokerage/disconnect" in js
+
+
+def test_app_js_is_syntactically_valid():
+    """app.js is plain text we serve verbatim, so the test suite never executes it — a
+    syntax error (e.g. an unescaped quote) would ship a wholly broken UI silently. Parse
+    it with node when available; skip (don't fail) on machines without node installed."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed; cannot syntax-check app.js")
+    result = subprocess.run([node, "--check", str(_UI / "app.js")],
+                            capture_output=True, text=True)
+    assert result.returncode == 0, f"app.js failed node --check:\n{result.stderr}"

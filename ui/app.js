@@ -188,7 +188,7 @@ async function loadIntegrations() {
   $("#snap-consumer-key").value = "";
   $("#snap-keys-status").textContent = d.brokerage.keys_set ? "Keys saved ✓" : "No keys set.";
   $("#broker-status").textContent = d.brokerage.linked
-    ? "Previously connected — click "Check connection" to confirm." : "Not connected.";
+    ? "Previously connected — click “Check connection” to confirm." : "Not connected.";
   $("#integrations-msg").textContent = "";
 }
 $("#save-ai-btn").addEventListener("click", async () => {
