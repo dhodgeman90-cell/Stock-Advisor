@@ -110,6 +110,39 @@
       <button id="test-email-btn">Send test email</button>
     </div>
     <span id="integrations-msg" class="msg"></span>
+
+    <h2>Brokerage (Robinhood)</h2>
+    <p class="muted">Connect your brokerage to sync your real holdings into the briefing.
+    The connection is <b>read-only</b> &mdash; this app can never place trades &mdash; and your
+    brokerage password is never stored here. You log in once through SnapTrade (which handles
+    2-step verification), and daily briefings sync automatically after that.</p>
+    <p class="muted">For now you bring your own free SnapTrade keys (a one-time, ~3-minute setup).
+    This keeps your connection private to your own computer. A simpler one-click option may come
+    later.</p>
+    <details class="howto">
+      <summary>How to get your free SnapTrade keys</summary>
+      <ol>
+        <li>Create a free account at
+          <a href="https://dashboard.snaptrade.com" target="_blank" rel="noopener">dashboard.snaptrade.com</a>.</li>
+        <li>Create an app/project in the dashboard.</li>
+        <li>Copy the <b>Client ID</b> and <b>Consumer Key</b> it gives you.</li>
+        <li>Paste them below and click <b>Save keys</b>, then <b>Connect Robinhood</b>.</li>
+      </ol>
+    </details>
+    <div class="field"><label>SnapTrade Client ID
+      <input id="snap-client-id" type="text" placeholder="e.g. STOCKADVISOR-ABCD" autocomplete="off"></label></div>
+    <div class="field"><label>SnapTrade Consumer Key
+      <input id="snap-consumer-key" type="password" placeholder="leave blank to keep current" autocomplete="off"></label></div>
+    <span id="snap-keys-status" class="muted"></span>
+    <div class="row">
+      <button id="save-snap-keys-btn">Save keys</button>
+    </div>
+    <div class="row">
+      <button id="connect-broker-btn">Connect Robinhood</button>
+      <button id="check-broker-btn">Check connection</button>
+      <button id="disconnect-broker-btn">Disconnect</button>
+    </div>
+    <span id="broker-status" class="muted"></span>
   </section>
 </main>
 

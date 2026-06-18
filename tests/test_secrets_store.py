@@ -33,4 +33,5 @@ def test_backend_failure_degrades_to_none():
 
 def test_expected_constants():
     assert secrets_store.SERVICE == "StockAdvisor"
-    assert set(secrets_store.SECRET_KEYS) == {"ANTHROPIC_API_KEY", "EMAIL_PASSWORD"}
+    assert set(secrets_store.SECRET_KEYS) == {"ANTHROPIC_API_KEY", "EMAIL_PASSWORD",
+                                              "SNAPTRADE_CONSUMER_KEY", "SNAPTRADE_USER_SECRET"}
