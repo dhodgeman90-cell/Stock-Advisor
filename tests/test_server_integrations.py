@@ -172,15 +172,35 @@ def test_connect_returns_portal_url(tmp_path, monkeypatch):
     client.put("/api/integrations/brokerage/keys",
                json={"client_id": "cid-1", "consumer_key": "ckey-1"})
     monkeypatch.setattr(brokerage_link, "start_connect",
-                        lambda config_dir: "https://portal.example/go")
+                        lambda config_dir, custom_redirect=None: "https://portal.example/go")
     r = client.post("/api/integrations/brokerage/connect")
     assert r.status_code == 200 and r.json()["redirect_url"] == "https://portal.example/go"
+
+
+def test_connect_passes_local_redirect_to_portal(tmp_path, monkeypatch):
+    client, _ = _client(tmp_path)
+    captured = {}
+
+    def fake_start(config_dir, custom_redirect=None):
+        captured["redirect"] = custom_redirect
+        return "https://portal.example/go"
+
+    monkeypatch.setattr(brokerage_link, "start_connect", fake_start)
+    client.post("/api/integrations/brokerage/connect")
+    assert captured["redirect"].endswith("/brokerage/connected")
+
+
+def test_brokerage_connected_landing_page(tmp_path):
+    client, _ = _client(tmp_path)
+    r = client.get("/brokerage/connected")
+    assert r.status_code == 200
+    assert "close this tab" in r.text.lower()
 
 
 def test_connect_without_keys_is_400(tmp_path, monkeypatch):
     client, _ = _client(tmp_path)
 
-    def boom(config_dir):
+    def boom(config_dir, custom_redirect=None):
         raise brokerage_link.BrokerageError("Enter your SnapTrade Client ID and Consumer Key first.")
 
     monkeypatch.setattr(brokerage_link, "start_connect", boom)

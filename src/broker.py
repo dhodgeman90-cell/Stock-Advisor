@@ -48,16 +48,18 @@ def _default_list_accounts(client) -> list:
 
 
 def _default_list_positions(client, account_id) -> list:
-    # get_user_holdings replaces the deprecated get_user_account_positions; its body is a
-    # holdings object whose `positions` array has the same per-position shape we parse.
-    resp = client.account_information.get_user_holdings(
+    # NOTE: use get_user_account_positions, NOT get_user_holdings. The SDK logs the former
+    # as "deprecated", but it still works and returns the positions list directly. Its
+    # supposed replacement, get_user_holdings, returns HTTP 410 ("no longer available for
+    # your account") on real accounts — verified live 2026-06-18 — so switching to it
+    # silently broke live holdings (the briefing fell back to positions.yaml). Until
+    # SnapTrade ships a working successor, the deprecated-but-functional call is correct.
+    resp = client.account_information.get_user_account_positions(
         user_id=os.environ["SNAPTRADE_USER_ID"],
         user_secret=os.environ["SNAPTRADE_USER_SECRET"],
         account_id=account_id,
     )
-    body = resp.body or {}
-    positions = body["positions"] if "positions" in body else []
-    return list(positions)
+    return list(resp.body)
 
 
 # ---- pure parsing/aggregation (fully unit-tested) ----

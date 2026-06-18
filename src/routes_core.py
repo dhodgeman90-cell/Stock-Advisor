@@ -27,6 +27,22 @@ def register(app) -> None:
         return Response((ui / "style.css").read_text(encoding="utf-8"),
                         media_type="text/css")
 
+    @app.get("/brokerage/connected", response_class=HTMLResponse)
+    def brokerage_connected():
+        # Landing page the SnapTrade portal redirects to after a successful link, so its
+        # "Done" button returns somewhere instead of dead-ending. The app window itself
+        # detects the connection by polling; this tab is just a friendly dead-end-killer.
+        return (
+            "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+            "<title>Connected</title></head>"
+            "<body style='font-family:system-ui,sans-serif;text-align:center;padding:3rem 1.5rem;color:#14532d'>"
+            "<h1 style='font-size:2rem;margin:0 0 .5rem'>&#10003; Connected</h1>"
+            "<p style='color:#374151;max-width:28rem;margin:0 auto'>Your brokerage is linked. "
+            "You can close this tab and return to Stock Advisor &mdash; your holdings will "
+            "appear in the next briefing.</p></body></html>"
+        )
+
     @app.get("/api/state")
     def state(profile=Depends(get_profile)):
         return {"disclaimer_accepted": onboarding.disclaimer_accepted(profile)}

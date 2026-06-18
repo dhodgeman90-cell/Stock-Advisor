@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from src import config, secrets_store, briefing, brokerage_link
@@ -117,9 +117,12 @@ def register(app) -> None:
         return {"ok": True, "keys_set": brokerage_link.keys_present(profile.config_dir)}
 
     @app.post("/api/integrations/brokerage/connect")
-    def connect_brokerage(profile=Depends(get_profile)):
+    def connect_brokerage(request: Request, profile=Depends(get_profile)):
+        # Send the portal back to our own /brokerage/connected page (skipping its dead-end
+        # "Done" screen). base_url is this running app's origin incl. the dynamic port.
+        redirect = str(request.base_url) + "brokerage/connected"
         try:
-            url = brokerage_link.start_connect(profile.config_dir)
+            url = brokerage_link.start_connect(profile.config_dir, custom_redirect=redirect)
         except brokerage_link.BrokerageError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         profile.secrets.update_config_values(config.load_integrations(profile.config_dir))

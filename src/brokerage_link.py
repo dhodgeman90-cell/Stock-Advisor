@@ -69,8 +69,15 @@ def save_keys(config_dir, client_id, consumer_key) -> None:
         secrets_store.delete_secret("SNAPTRADE_CONSUMER_KEY")
 
 
-def start_connect(config_dir, *, client_factory=_client) -> str:
-    """Register the connected user (once) and return the SnapTrade portal URL to open."""
+def start_connect(config_dir, *, client_factory=_client, custom_redirect=None) -> str:
+    """Register the connected user (once) and return the SnapTrade portal URL to open.
+
+    When `custom_redirect` is given (a URL back into this app), ask the portal to skip its
+    final 'Done' screen (immediate_redirect) and send the user straight there after
+    connecting — otherwise the standalone-tab portal's 'Done' button has nowhere to return
+    to. SnapTrade accepts a localhost redirect without dashboard allowlisting (verified live
+    2026-06-18); if it ever ignores it, the flow still works, just without the auto-return.
+    """
     client_id, consumer_key, user_id, user_secret = _creds(config_dir)
     if not client_id or not consumer_key:
         raise BrokerageError("Enter your SnapTrade Client ID and Consumer Key first.")
@@ -91,8 +98,12 @@ def start_connect(config_dir, *, client_factory=_client) -> str:
         config.save_brokerage_identity(config_dir, user_id=user_id)
         secrets_store.set_secret("SNAPTRADE_USER_SECRET", user_secret)
 
+    login_kwargs = {"user_id": user_id, "user_secret": user_secret}
+    if custom_redirect:
+        login_kwargs["custom_redirect"] = custom_redirect
+        login_kwargs["immediate_redirect"] = True
     try:
-        resp = client.authentication.login_snap_trade_user(user_id=user_id, user_secret=user_secret)
+        resp = client.authentication.login_snap_trade_user(**login_kwargs)
         url = _field(resp.body, "redirectURI", "redirect_uri")
     except Exception as e:   # noqa: BLE001
         raise BrokerageError("Could not open the SnapTrade portal — try again in a moment.") from e
