@@ -184,6 +184,11 @@ async function loadIntegrations() {
   $("#email-port").value = d.email.port || "465";
   $("#email-pass").value = "";
   $("#email-status").textContent = d.email.password_set ? "App password saved ✓" : "No app password set.";
+  $("#snap-client-id").value = d.brokerage.client_id || "";
+  $("#snap-consumer-key").value = "";
+  $("#snap-keys-status").textContent = d.brokerage.keys_set ? "Keys saved ✓" : "No keys set.";
+  $("#broker-status").textContent = d.brokerage.linked
+    ? "Previously connected — click "Check connection" to confirm." : "Not connected.";
   $("#integrations-msg").textContent = "";
 }
 $("#save-ai-btn").addEventListener("click", async () => {
@@ -222,6 +227,57 @@ $("#test-email-btn").addEventListener("click", async () => {
     await api("/api/integrations/email/test", { method: "POST" });
     $("#integrations-msg").textContent = "Test email sent — check your inbox.";
   } catch (e) { $("#integrations-msg").textContent = "Test failed: " + e.message; }
+});
+
+$("#save-snap-keys-btn").addEventListener("click", async () => {
+  const body = {
+    client_id: $("#snap-client-id").value.trim(),
+    consumer_key: $("#snap-consumer-key").value,   // blank keeps existing
+  };
+  try {
+    await api("/api/integrations/brokerage/keys", { method: "PUT", body: JSON.stringify(body) });
+    $("#integrations-msg").textContent = "Brokerage keys saved.";
+    loadIntegrations();
+  } catch (e) { $("#integrations-msg").textContent = "Save failed: " + e.message; }
+});
+
+let brokerPoll = null;
+async function checkBroker(quiet) {
+  try {
+    const d = await api("/api/integrations/brokerage/verify", { method: "POST" });
+    if (d.connected) {
+      $("#broker-status").textContent = `Connected ✓ — ${d.account_count} account(s).`;
+      if (brokerPoll) { clearInterval(brokerPoll); brokerPoll = null; }
+    } else if (!quiet) {
+      $("#broker-status").textContent = "Not connected yet — finish logging in, then Check connection.";
+    }
+  } catch (e) {
+    if (!quiet) $("#broker-status").textContent = "Check failed: " + e.message;
+  }
+}
+$("#connect-broker-btn").addEventListener("click", async () => {
+  $("#broker-status").textContent = "Opening SnapTrade…";
+  try {
+    const d = await api("/api/integrations/brokerage/connect", { method: "POST" });
+    window.open(d.redirect_url, "_blank", "noopener");
+    $("#broker-status").textContent = "Finish logging in to Robinhood in the new tab…";
+    // Auto-poll for ~60s so the status flips to Connected without the user clicking.
+    if (brokerPoll) clearInterval(brokerPoll);
+    let ticks = 0;
+    brokerPoll = setInterval(() => {
+      if (++ticks > 20) { clearInterval(brokerPoll); brokerPoll = null; return; }
+      checkBroker(true);
+    }, 3000);
+  } catch (e) { $("#broker-status").textContent = "Connect failed: " + e.message; }
+});
+$("#check-broker-btn").addEventListener("click", () => checkBroker(false));
+$("#disconnect-broker-btn").addEventListener("click", async () => {
+  try {
+    await api("/api/integrations/brokerage/disconnect", { method: "POST" });
+    if (brokerPoll) { clearInterval(brokerPoll); brokerPoll = null; }
+    $("#integrations-msg").textContent = "Brokerage disconnected.";
+    loadIntegrations();
+  } catch (e) { $("#integrations-msg").textContent = "Disconnect failed: " + e.message; }
 });
 
 // ---- heartbeat ----
