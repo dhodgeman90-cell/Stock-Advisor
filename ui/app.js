@@ -134,22 +134,34 @@ $("#save-settings-btn").addEventListener("click", async () => {
 });
 
 // ---- positions ----
-function positionRow(p = {}) {
+// Live rows (from the connected brokerage) lock the core fields (ticker/price/date/shares)
+// read-only — you can't hand-edit a real holding — but the exit-override % fields stay
+// editable. Manual rows are fully editable and deletable.
+function positionRow(p = {}, live = false) {
   const tr = document.createElement("tr");
+  const ro = live ? "readonly" : "";
   tr.innerHTML =
-    `<td><input class="p-ticker" value="${esc(p.ticker || "")}" maxlength="8"></td>` +
-    `<td><input class="p-price" type="number" step="0.01" value="${p.entry_price ?? ""}"></td>` +
-    `<td><input class="p-date" type="date" value="${esc(p.entry_date || "")}"></td>` +
-    `<td><input class="p-shares" type="number" step="any" value="${p.shares ?? ""}"></td>` +
-    `<td><button class="p-del">×</button></td>`;
-  tr.querySelector(".p-del").addEventListener("click", () => tr.remove());
+    `<td><input class="p-ticker" value="${esc(p.ticker || "")}" maxlength="8" ${ro}></td>` +
+    `<td><input class="p-price" type="number" step="0.01" value="${p.entry_price ?? ""}" ${ro}></td>` +
+    `<td><input class="p-date" type="date" value="${esc(p.entry_date || "")}" ${ro}></td>` +
+    `<td><input class="p-shares" type="number" step="any" value="${p.shares ?? ""}" ${ro}></td>` +
+    `<td><input class="p-stop" type="number" step="any" value="${p.stop_loss_pct ?? ""}"></td>` +
+    `<td><input class="p-tp" type="number" step="any" value="${p.take_profit_pct ?? ""}"></td>` +
+    `<td><input class="p-trail" type="number" step="any" value="${p.trailing_stop_pct ?? ""}"></td>` +
+    `<td>${live ? "<span class='muted' title='Live from your brokerage'>live</span>"
+                 : "<button class='p-del'>×</button>"}</td>`;
+  const del = tr.querySelector(".p-del");
+  if (del) del.addEventListener("click", () => tr.remove());
   return tr;
 }
 async function loadPositions() {
   const data = await api("/api/positions");
   const body = $("#positions-body");
   body.innerHTML = "";
-  data.positions.forEach((p) => body.appendChild(positionRow(p)));
+  data.positions.forEach((p) => body.appendChild(positionRow(p, !!p.live)));
+  $("#positions-note").textContent = data.connected
+    ? "Live holdings from your brokerage (read-only). Set optional exit overrides — stop %, take-profit %, trailing %. Use “Add row” for positions you hold elsewhere."
+    : "Manual positions. Connect a brokerage in Integrations to track your live holdings here automatically.";
   $("#positions-msg").textContent = "";
 }
 $("#add-position-btn").addEventListener("click", () =>
@@ -160,16 +172,23 @@ $("#save-positions-btn").addEventListener("click", async () => {
     const ticker = tr.querySelector(".p-ticker").value.trim().toUpperCase();
     const price = parseFloat(tr.querySelector(".p-price").value);
     if (!ticker || !(price > 0)) continue;
+    const p = { ticker, entry_price: price };
     const date = tr.querySelector(".p-date").value.trim();
     const shares = tr.querySelector(".p-shares").value.trim();
-    const p = { ticker, entry_price: price };
+    const stop = tr.querySelector(".p-stop").value.trim();
+    const tp = tr.querySelector(".p-tp").value.trim();
+    const trail = tr.querySelector(".p-trail").value.trim();
     if (date) p.entry_date = date;
     if (shares) p.shares = parseFloat(shares);
+    if (stop) p.stop_loss_pct = parseFloat(stop);
+    if (tp) p.take_profit_pct = parseFloat(tp);
+    if (trail) p.trailing_stop_pct = parseFloat(trail);
     positions.push(p);
   }
   try {
     await api("/api/positions", { method: "PUT", body: JSON.stringify({ positions }) });
     $("#positions-msg").textContent = "Saved.";
+    loadPositions();
   } catch (e) { $("#positions-msg").textContent = "Save failed: " + e.message; }
 });
 
