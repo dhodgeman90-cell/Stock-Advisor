@@ -43,12 +43,14 @@ class _FakeAuth:
         self._user_secret = user_secret
         self._redirect_uri = redirect_uri
         self.registered = []   # user_ids passed to register, in order
+        self.login_kwargs = {}   # extra kwargs from the last login call (custom_redirect, etc.)
 
     def register_snap_trade_user(self, user_id=None):
         self.registered.append(user_id)
         return _Resp({"userId": user_id, "userSecret": self._user_secret})
 
-    def login_snap_trade_user(self, user_id=None, user_secret=None):
+    def login_snap_trade_user(self, user_id=None, user_secret=None, **kwargs):
+        self.login_kwargs = dict(kwargs)
         return _Resp({"redirectURI": self._redirect_uri})
 
 
