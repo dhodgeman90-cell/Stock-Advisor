@@ -260,12 +260,20 @@ $("#connect-broker-btn").addEventListener("click", async () => {
   try {
     const d = await api("/api/integrations/brokerage/connect", { method: "POST" });
     window.open(d.redirect_url, "_blank", "noopener");
-    $("#broker-status").textContent = "Finish logging in to Robinhood in the new tab…";
-    // Auto-poll for ~60s so the status flips to Connected without the user clicking.
+    $("#broker-status").textContent =
+      "A SnapTrade tab opened — log in to your brokerage there. When you’re done, come back " +
+      "here and this will update on its own. (Closing the SnapTrade tab is fine.)";
+    // A real brokerage login with 2FA can take a few minutes, so poll patiently
+    // (every 3s for ~10 min) instead of giving up after a minute.
     if (brokerPoll) clearInterval(brokerPoll);
     let ticks = 0;
     brokerPoll = setInterval(() => {
-      if (++ticks > 20) { clearInterval(brokerPoll); brokerPoll = null; return; }
+      if (++ticks > 200) {
+        clearInterval(brokerPoll); brokerPoll = null;
+        $("#broker-status").textContent =
+          "Still not detected. Once you’ve finished in the SnapTrade tab, click “Check connection”.";
+        return;
+      }
       checkBroker(true);
     }, 3000);
   } catch (e) { $("#broker-status").textContent = "Connect failed: " + e.message; }

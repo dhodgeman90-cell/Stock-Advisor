@@ -42,6 +42,28 @@ def test_start_connect_reuses_existing_user_without_reregistering(tmp_path):
     assert fake.authentication.registered == []                    # no re-registration
 
 
+def test_start_connect_forwards_custom_redirect_and_immediate(tmp_path):
+    brokerage_link.save_keys(tmp_path, "cid-1", "ckey-1")
+    config.save_brokerage_identity(tmp_path, user_id="u")
+    secrets_store.set_secret("SNAPTRADE_USER_SECRET", "s")
+    fake = FakeSnapTrade(redirect_uri="https://portal/x")
+    brokerage_link.start_connect(
+        tmp_path, client_factory=lambda c, k: fake,
+        custom_redirect="http://127.0.0.1:8000/brokerage/connected")
+    assert fake.authentication.login_kwargs.get("custom_redirect") == \
+        "http://127.0.0.1:8000/brokerage/connected"
+    assert fake.authentication.login_kwargs.get("immediate_redirect") is True
+
+
+def test_start_connect_omits_redirect_when_not_given(tmp_path):
+    brokerage_link.save_keys(tmp_path, "cid-1", "ckey-1")
+    config.save_brokerage_identity(tmp_path, user_id="u")
+    secrets_store.set_secret("SNAPTRADE_USER_SECRET", "s")
+    fake = FakeSnapTrade()
+    brokerage_link.start_connect(tmp_path, client_factory=lambda c, k: fake)
+    assert "custom_redirect" not in fake.authentication.login_kwargs
+
+
 def test_check_connection_reports_account_count(tmp_path):
     brokerage_link.save_keys(tmp_path, "cid-1", "ckey-1")
     config.save_brokerage_identity(tmp_path, user_id="u")
