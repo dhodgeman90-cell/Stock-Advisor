@@ -48,12 +48,16 @@ def _default_list_accounts(client) -> list:
 
 
 def _default_list_positions(client, account_id) -> list:
-    resp = client.account_information.get_user_account_positions(
+    # get_user_holdings replaces the deprecated get_user_account_positions; its body is a
+    # holdings object whose `positions` array has the same per-position shape we parse.
+    resp = client.account_information.get_user_holdings(
         user_id=os.environ["SNAPTRADE_USER_ID"],
         user_secret=os.environ["SNAPTRADE_USER_SECRET"],
         account_id=account_id,
     )
-    return list(resp.body)
+    body = resp.body or {}
+    positions = body["positions"] if "positions" in body else []
+    return list(positions)
 
 
 # ---- pure parsing/aggregation (fully unit-tested) ----
