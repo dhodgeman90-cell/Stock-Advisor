@@ -6,7 +6,7 @@ import pandas as pd
 
 from src import (config, data, scoring, news, agents, adjudicator, briefing,
                  exits, broker, social, congress, insights, market, rotation,
-                 objectives, onboarding, edgar, options, fetchpool)
+                 objectives, onboarding, edgar, options, fetchpool, picks)
 from src.profile import Profile
 from src.results import RunResult
 
@@ -359,6 +359,14 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None) -> R
         )
         (vetoed if adjd["vetoed"] else ranked).append(adjd)
     ranked.sort(key=lambda r: r["final_score"], reverse=True)
+
+    # Log today's picks to the structured ledger so the scorecard can later grade how
+    # they performed. Guarded like the email block — a ledger hiccup must never break the
+    # briefing the owner is reading.
+    try:
+        picks.log_picks(ranked, df_by_ticker, profile.data_dir, date_str)
+    except Exception as e:
+        print(f"[pick log failed: {e}]")
 
     if use_ai and holdings_actionable:
         for h in holdings:

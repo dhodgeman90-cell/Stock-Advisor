@@ -26,6 +26,9 @@ def create_app(profile: Profile) -> FastAPI:
     from src import routes_briefing
     routes_briefing.register(app)
 
+    from src import routes_scorecard
+    routes_scorecard.register(app)
+
     from src import routes_integrations
     routes_integrations.register(app)
 

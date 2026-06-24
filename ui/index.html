@@ -21,6 +21,7 @@
   <div class="brand">Stock Advisor</div>
   <nav>
     <button class="nav-btn active" data-screen="briefing">Briefing</button>
+    <button class="nav-btn" data-screen="scorecard">Scorecard</button>
     <button class="nav-btn" data-screen="watchlist">Watchlist</button>
     <button class="nav-btn" data-screen="positions">Positions</button>
     <button class="nav-btn" data-screen="integrations">Integrations</button>
@@ -44,6 +45,18 @@
     </div>
     <div id="briefing-status" class="status"></div>
     <div id="briefing-content"></div>
+  </section>
+
+  <section id="screen-scorecard" class="screen hidden">
+    <div class="row">
+      <h1>Pick scorecard</h1>
+      <button id="scorecard-btn">Refresh</button>
+    </div>
+    <p class="muted">How past briefing picks actually performed — forward return vs SPY
+    (does the score predict the move?) and a simulated trade using the app's own exit
+    rules (would trading them have paid?).</p>
+    <div id="scorecard-status" class="status"></div>
+    <div id="scorecard-content"></div>
   </section>
 
   <section id="screen-watchlist" class="screen hidden">

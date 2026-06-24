@@ -22,6 +22,7 @@ function showScreen(name) {
   $(`#screen-${name}`).classList.remove("hidden");
   document.querySelectorAll(".nav-btn").forEach((b) =>
     b.classList.toggle("active", b.dataset.screen === name));
+  if (name === "scorecard") loadScorecard();
   if (name === "watchlist") loadSettings();
   if (name === "positions") loadPositions();
   if (name === "integrations") loadIntegrations();
@@ -94,6 +95,31 @@ $("#briefing-history").addEventListener("change", async () => {
   const d = await api("/api/briefing/item/" + encodeURIComponent(id));
   if (d.status === "ok") $("#briefing-content").innerHTML = d.html;
 });
+
+// ---- scorecard ----
+// Grading fetches prices for every past pick, so it's slow (~20-40s). Cache the first
+// result for the session; the Refresh button forces a re-grade.
+let scorecardLoaded = false;
+async function loadScorecard(force = false) {
+  if (scorecardLoaded && !force) return;
+  $("#scorecard-btn").disabled = true;
+  $("#scorecard-status").textContent = "Grading past picks… fetching prices (this can take ~30s).";
+  try {
+    const d = await api("/api/scorecard");
+    if (d.status === "ok") {
+      $("#scorecard-content").innerHTML = d.html;
+      $("#scorecard-status").textContent = "";
+      scorecardLoaded = true;
+    } else {
+      $("#scorecard-status").textContent = "Could not build scorecard: " + (d.message || "unknown error");
+    }
+  } catch (e) {
+    $("#scorecard-status").textContent = "Could not build scorecard: " + e.message;
+  } finally {
+    $("#scorecard-btn").disabled = false;
+  }
+}
+$("#scorecard-btn").addEventListener("click", () => loadScorecard(true));
 
 // ---- watchlist / settings ----
 let tickers = [];

@@ -23,3 +23,15 @@ class RunResult:
     discovery: dict = field(default_factory=dict)
     report_path: Optional[Path] = None
     skipped: bool = False
+
+
+@dataclass
+class ScorecardResult:
+    """Result of grading past picks (src/scorecard.py). `graded` is the per-pick detail;
+    `summaries` holds the aggregated forward-vs-SPY and exit-rule-simulation views."""
+    date: str
+    text: str
+    html: str = ""
+    graded: list = field(default_factory=list)
+    summaries: dict = field(default_factory=dict)
+    report_path: Optional[Path] = None
