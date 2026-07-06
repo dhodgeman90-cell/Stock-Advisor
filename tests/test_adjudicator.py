@@ -174,3 +174,21 @@ def test_veto_wins_over_congress_buy():
     )
     assert out["vetoed"] is True
     assert out["final_score"] == 70
+
+
+# ---- structured per-signal attribution (adjustment_detail) ----
+def test_adjustment_detail_is_structured_and_reproduces_score():
+    out = _adj(60, congress={"net_side": "buy", "n_members": 2},
+               analyst={"rating": "sell", "upside_pct": -10})
+    detail = {d["key"]: d["points"] for d in out["adjustment_detail"]}
+    assert detail["congress_buy"] == 18       # signed points, positive for a buy
+    assert detail["analyst_bear"] == -8       # negative for a demotion
+    # base + sum(points) reproduces the final score exactly (no clamp here)
+    assert 60 + sum(d["points"] for d in out["adjustment_detail"]) == out["final_score"]
+
+
+def test_veto_has_empty_adjustment_detail():
+    risk = {"risk_level": "high", "red_flags": [], "veto": True, "reason": "fraud"}
+    out = adjudicator.adjudicate({"ticker": "X", "score": 70}, NEUTRAL_NEWS, risk,
+                                 NEUTRAL_CTX, EXT_CAPS, thresholds=THRESH)
+    assert out["adjustment_detail"] == []

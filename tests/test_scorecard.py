@@ -177,6 +177,76 @@ def test_render_scorecard_report_has_caveat_and_disclaimer():
     assert "not financial advice" in html.lower()
 
 
+def test_summary_from_graded_flags_underperformance_and_gates_sample():
+    # 30 matured picks, cohort alpha negative -> underperforming, enough at floor 30.
+    graded = [{"final_score": 90, "band": ">=80", "ret_5d": -1.0, "alpha_5d": -2.0,
+               "conviction": "high",
+               "sim": {"status": "closed", "reason": "stop_loss", "hold_days": 3,
+                       "return_pct": -3.0}} for _ in range(30)]
+    s = scorecard.summary_from_graded(graded, buy_threshold=65, n_picks=30, min_matured=30)
+    assert s["enough"] is True and s["underperforming"] is True
+    assert round(s["cohort_alpha_5d"], 1) == -2.0
+    assert round(s["sim_expectancy"], 1) == -3.0
+
+
+def test_summary_from_graded_withholds_below_floor():
+    graded = [{"final_score": 90, "band": ">=80", "ret_5d": 1.0, "alpha_5d": 1.0,
+               "conviction": "high",
+               "sim": {"status": "open", "reason": "open", "hold_days": 3,
+                       "return_pct": 1.0}} for _ in range(5)]
+    s = scorecard.summary_from_graded(graded, buy_threshold=65, n_picks=5, min_matured=30)
+    assert s["enough"] is False and s["n_matured"] == 5
+
+
+def test_grade_pick_carries_fired_signals():
+    dates = ["2026-06-08", "2026-06-09", "2026-06-10"]
+    df = _df(dates, [100.0, 100.0, 110.0])
+    spy = _df(dates, [400.0, 400.0, 416.0])
+    g = scorecard.grade_pick(
+        {"date": "2026-06-08", "ticker": "T", "final_score": 90.0,
+         "signals": ["congress_buy", "catalyst"]}, df, spy, RULES)
+    assert g["signals"] == ["congress_buy", "catalyst"]
+
+
+# ---- per-signal attribution (view 3) ----
+
+def test_summarize_by_signal_compares_fired_vs_not_and_gates_thin_samples():
+    # 22 picks fire congress_buy with weak alpha; 22 fire catalyst with strong alpha.
+    graded = []
+    for _ in range(22):
+        graded.append({"alpha_5d": -2.0, "ret_5d": -1.0, "signals": ["congress_buy"]})
+        graded.append({"alpha_5d": 3.0, "ret_5d": 4.0, "signals": ["catalyst"]})
+    by = scorecard.summarize_by_signal(graded, min_fires=20)
+    cb = by["congress_buy"]
+    assert cb["insufficient"] is False and cb["n_fired"] == 22
+    assert round(cb["avg_alpha_fired"], 1) == -2.0
+    assert round(cb["avg_alpha_not_fired"], 1) == 3.0     # the catalyst cohort
+    assert round(cb["alpha_delta"], 1) == -5.0            # value-destroying signal
+
+
+def test_summarize_by_signal_flags_insufficient_below_min():
+    graded = [{"alpha_5d": 1.0, "ret_5d": 1.0, "signals": ["catalyst"]} for _ in range(5)]
+    by = scorecard.summarize_by_signal(graded, min_fires=20)
+    assert by["catalyst"]["insufficient"] is True and by["catalyst"]["n_fired"] == 5
+    assert "avg_alpha_fired" not in by["catalyst"]        # not scored on a thin sample
+
+
+def test_render_scorecard_report_shows_signal_attribution_when_present():
+    graded = [{"date": "2026-06-08", "ticker": "AAA", "final_score": 90.0, "conviction": "high",
+               "band": ">=80", "entry": 100.0, "entry_date": "2026-06-08",
+               "ret_1d": 1.0, "ret_5d": 3.0, "ret_21d": None, "ret_todate": 5.0,
+               "alpha_1d": 0.5, "alpha_5d": 1.0, "alpha_21d": None, "alpha_todate": 2.0,
+               "sim": {"status": "open", "reason": "open", "hold_days": 4, "return_pct": 1.0}}]
+    forward = {k: scorecard.summarize_scorecard(graded, k, k.replace("ret", "alpha"), 65)
+               for k in ("ret_1d", "ret_5d", "ret_21d")}
+    result = {"graded": graded, "forward": forward, "sim": scorecard.summarize_sim(graded),
+              "by_signal": {"congress_buy": {"n_fired": 25, "insufficient": False,
+                                             "avg_alpha_fired": -2.0, "avg_alpha_not_fired": 1.0,
+                                             "alpha_delta": -3.0, "avg_ret_fired": -1.0}}}
+    text = scorecard.render_scorecard_report(result, "2026-06-24")
+    assert "Signal attribution" in text and "congress_buy" in text
+
+
 def test_render_scorecard_report_omits_independent_block_when_absent():
     # Back-compat: a result without forward_unique still renders (no dedup section).
     graded = [{"date": "2026-06-08", "ticker": "AAA", "final_score": 90.0,

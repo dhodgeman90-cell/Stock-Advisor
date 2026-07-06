@@ -5,6 +5,7 @@ import pandas as pd
 REQUIRED_COLS = ["Open", "High", "Low", "Close", "Volume"]
 OHLC_COLS = ["Open", "High", "Low", "Close"]
 WARMUP_DAYS = 100   # extra calendar days so the SMA-50 / MIN_HISTORY ramp is warm
+DATA_TIMEOUT = 20   # seconds; cap a hung yfinance socket instead of blocking a worker forever
 
 
 def _drop_incomplete(df):
@@ -86,6 +87,7 @@ def fetch_history(ticker: str, days: int):
         interval="1d",
         auto_adjust=True,
         progress=False,
+        timeout=DATA_TIMEOUT,
     )
     # Newer yfinance returns MultiIndex columns even for a single ticker
     if isinstance(df.columns, pd.MultiIndex):

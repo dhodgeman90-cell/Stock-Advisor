@@ -13,6 +13,26 @@ def _filings(rows):
     return forms, items, dates
 
 
+def test_signal_asof_excludes_future_filings():
+    # earnings 8-K in the past; a bankruptcy 8-K in the FUTURE relative to the as-of date.
+    forms, items, dates = _filings([
+        ("8-K", "2.02", "2026-06-01"),      # earnings -> catalyst (known by as-of)
+        ("8-K", "1.03", "2026-06-20"),      # bankruptcy -> severe (NOT yet known)
+    ])
+    sig = edgar.signal_asof(forms, items, dates, "2026-06-10", window_days=30)
+    assert sig["catalyst"] is True and sig["severe"] is False   # future filing excluded
+    assert sig["as_of"] == "2026-06-01"
+    # ...and once the as-of moves past the bankruptcy, it counts.
+    later = edgar.signal_asof(forms, items, dates, "2026-06-25", window_days=30)
+    assert later["severe"] is True
+
+
+def test_signal_asof_respects_window_lower_bound():
+    forms, items, dates = _filings([("8-K", "2.02", "2026-05-01")])   # 40+ days before
+    sig = edgar.signal_asof(forms, items, dates, "2026-06-17", window_days=30)
+    assert sig["catalyst"] is False        # too old, outside the 30-day window
+
+
 def test_parse_catalyst_from_8k_items():
     forms, items, dates = _filings([
         ("8-K", "2.02,9.01", "2026-06-10"),     # earnings -> catalyst

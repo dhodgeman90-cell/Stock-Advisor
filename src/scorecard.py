@@ -184,6 +184,7 @@ def grade_pick(pick, df, spy_df, rules) -> dict:
         "date": pick["date"], "ticker": pick["ticker"],
         "final_score": pick.get("final_score"), "conviction": pick.get("conviction"),
         "band": _band(pick.get("final_score")), "logged_entry": pick.get("entry_close"),
+        "signals": list(pick.get("signals") or []),   # adjudicator caps that fired (for attribution)
     }
     entry_pos = _pos_on_or_after(df, pick["date"])
     if df is None or entry_pos is None:
@@ -291,6 +292,44 @@ def summarize_sim(graded) -> dict:
     }
 
 
+# Below this many matured fires, a per-signal alpha reading is too noisy to trust — it is
+# reported as "insufficient" rather than as a number that invites overfitting (the exact
+# trap that produced the inverted top band). Raise it as the ledger grows.
+MIN_SIGNAL_FIRES = 20
+
+
+def summarize_by_signal(graded, alpha_key="alpha_5d", ret_key="ret_5d",
+                        min_fires=MIN_SIGNAL_FIRES) -> dict:
+    """Per-signal forward-alpha attribution: for each adjudicator cap that fired, the avg
+    forward alpha of matured picks where it fired vs where it did NOT. This is what turns
+    "the score is inverted at the top" into an actionable cut-list — a cap whose fired
+    alpha is reliably below its not-fired alpha is subtracting value.
+
+    A signal with fewer than `min_fires` matured fires is flagged `insufficient` (n only),
+    never scored — a thin sample is noise, not evidence.
+    """
+    matured = [g for g in graded if not g.get("error") and g.get(alpha_key) is not None]
+    keys = sorted({k for g in matured for k in (g.get("signals") or [])})
+    out = {}
+    for key in keys:
+        fired = [g for g in matured if key in (g.get("signals") or [])]
+        if len(fired) < min_fires:
+            out[key] = {"n_fired": len(fired), "insufficient": True}
+            continue
+        not_fired = [g for g in matured if key not in (g.get("signals") or [])]
+        a_fired = _avg([g.get(alpha_key) for g in fired])
+        a_not = _avg([g.get(alpha_key) for g in not_fired])
+        out[key] = {
+            "n_fired": len(fired),
+            "insufficient": False,
+            "avg_alpha_fired": a_fired,
+            "avg_alpha_not_fired": a_not,
+            "alpha_delta": (a_fired - a_not) if (a_fired is not None and a_not is not None) else None,
+            "avg_ret_fired": _avg([g.get(ret_key) for g in fired]),
+        }
+    return out
+
+
 # ---------------------------------------------------------------------------- rendering
 
 def _fmt(v, suffix="%"):
@@ -364,6 +403,27 @@ def render_scorecard_report(result, date_str) -> str:
     if sim["by_reason"]:
         L.append("- Exit reasons: "
                  + ", ".join(f"{r.replace('_', ' ')} ×{n}" for r, n in sim["by_reason"].most_common()))
+
+    # ---- View 3: per-signal attribution ----
+    by_signal = result.get("by_signal") or {}
+    if by_signal:
+        L += ["", "## 3) Signal attribution — which caps actually help? (+5d alpha)",
+              "_For each adjudicator cap, avg +5d SPY-alpha of picks where it fired vs where it "
+              f"didn't. A cap needs ≥{MIN_SIGNAL_FIRES} fires to be scored; thinner ones are "
+              "noise. A negative delta means the signal is SUBTRACTING value — a cut candidate._"]
+        scored = {k: v for k, v in by_signal.items() if not v.get("insufficient")}
+        thin = {k: v for k, v in by_signal.items() if v.get("insufficient")}
+        if scored:
+            # Worst (most value-destroying) first — that's the actionable end of the list.
+            for key, v in sorted(scored.items(), key=lambda kv: (kv[1].get("alpha_delta") is None,
+                                                                 kv[1].get("alpha_delta") or 0)):
+                L.append(f"- **{key}** (n={v['n_fired']}): fired {_fmt(v['avg_alpha_fired'])} vs "
+                         f"not-fired {_fmt(v['avg_alpha_not_fired'])} → delta {_fmt(v['alpha_delta'])}")
+        else:
+            L.append("- _No signal has enough fires to score yet — the ledger is still young._")
+        if thin:
+            L.append("- _Insufficient sample: "
+                     + ", ".join(f"{k} (n={v['n_fired']})" for k, v in sorted(thin.items())) + "._")
 
     # ---- per-pick detail ----
     L += ["", "## Every pick"]
@@ -478,6 +538,70 @@ def _load(ticker, days, data_dir, fetch):
     return None
 
 
+def _grade(profile, fetch):
+    """Backfill + load the ledger, fetch each pick ticker's history (+ SPY), and grade
+    every pick. Returns (graded, buy_threshold, pick_list). Shared by run() and
+    briefing_summary() so both grade identically; neither prints nor writes here.
+
+    ponytail: histories span ledger-oldest + 40 days. If the caller passes a cache-first
+    `fetch` (main.run does), tickers it already pulled are reused and only SPY / untracked
+    names hit the network — this is why it stays cheap enough to call in the daily hot path.
+    """
+    backfill_from_reports(profile.reports_dir, profile.data_dir)
+    pick_list = picks.load_picks(profile.data_dir)
+    rules = config.load_exit_rules(profile.config_dir)
+    buy_threshold = float(rules["backtest"]["buy_threshold"])
+    if not pick_list:
+        return [], buy_threshold, pick_list
+    oldest = min(p["date"] for p in pick_list)
+    days = (dt.date.today() - dt.date.fromisoformat(oldest)).days + 40
+    histories = {}
+    for ticker in sorted({p["ticker"] for p in pick_list}):
+        df = _load(ticker, days, profile.data_dir, fetch)
+        if df is not None:
+            histories[ticker] = df
+    spy_df = _load("SPY", days, profile.data_dir, fetch)
+    graded = [grade_pick(p, histories.get(p["ticker"]), spy_df, rules) for p in pick_list]
+    return graded, buy_threshold, pick_list
+
+
+def summary_from_graded(graded, buy_threshold, n_picks, *, min_matured=30) -> dict:
+    """Compact reality-check numbers from already-graded picks (pure). The daily briefing
+    header calls this to confront the reader with the app's real hit-rate. Below
+    `min_matured` matured picks the numbers are withheld (`enough=False`) — a young ledger
+    is noise, and a misleading percentage at the decision moment is the whole thing to avoid.
+    """
+    fwd = summarize_scorecard(graded, "ret_5d", "alpha_5d", buy_threshold)
+    sim = summarize_sim(graded)["summary"]
+    cohort = fwd["cohort"] or fwd["overall"]   # actionable cohort, or all picks if no threshold
+    alpha = cohort.get("avg_alpha")
+    n_matured = fwd["n_matured"]
+    return {
+        "n_picks": n_picks,
+        "n_matured": n_matured,
+        "enough": n_matured >= min_matured,
+        "cohort_alpha_5d": alpha,
+        "beat_spy_rate": cohort.get("beat_spy_rate"),
+        "sim_expectancy": sim["expectancy"],
+        "sim_win": sim["win_rate"],
+        "underperforming": (alpha is not None and alpha < 0),
+    }
+
+
+def briefing_summary(profile: Profile | None = None, *, fetch=None, min_matured=30):
+    """Reality-check summary for the daily briefing header, or None when nothing is logged.
+    Writes nothing and prints nothing (unlike run()); safe to call in main.run's hot path.
+    """
+    if profile is None:
+        profile = Profile.for_repo()
+    if fetch is None:
+        fetch = data.fetch_history
+    graded, buy_threshold, pick_list = _grade(profile, fetch)
+    if not pick_list:
+        return None
+    return summary_from_graded(graded, buy_threshold, len(pick_list), min_matured=min_matured)
+
+
 def run(profile: Profile | None = None, *, fetch=None) -> ScorecardResult:
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -490,10 +614,7 @@ def run(profile: Profile | None = None, *, fetch=None) -> ScorecardResult:
     if fetch is None:
         fetch = data.fetch_history
 
-    backfill_from_reports(profile.reports_dir, profile.data_dir)
-    pick_list = picks.load_picks(profile.data_dir)
-    rules = config.load_exit_rules(profile.config_dir)
-    buy_threshold = float(rules["backtest"]["buy_threshold"])
+    graded, buy_threshold, pick_list = _grade(profile, fetch)
     date_str = dt.date.today().isoformat()
 
     if not pick_list:
@@ -503,17 +624,6 @@ def run(profile: Profile | None = None, *, fetch=None) -> ScorecardResult:
         return ScorecardResult(date=date_str, text=text,
                                html="<div>No picks logged yet.</div>")
 
-    oldest = min(p["date"] for p in pick_list)
-    days = (dt.date.today() - dt.date.fromisoformat(oldest)).days + 40
-
-    histories = {}
-    for ticker in sorted({p["ticker"] for p in pick_list}):
-        df = _load(ticker, days, profile.data_dir, fetch)
-        if df is not None:
-            histories[ticker] = df
-    spy_df = _load("SPY", days, profile.data_dir, fetch)
-
-    graded = [grade_pick(p, histories.get(p["ticker"]), spy_df, rules) for p in pick_list]
     horizons = (("ret_1d", "alpha_1d"), ("ret_5d", "alpha_5d"), ("ret_21d", "alpha_21d"))
     forward = {ret_key: summarize_scorecard(graded, ret_key, alpha_key, buy_threshold)
                for ret_key, alpha_key in horizons}
@@ -521,7 +631,8 @@ def run(profile: Profile | None = None, *, fetch=None) -> ScorecardResult:
     forward_unique = {ret_key: summarize_scorecard(unique, ret_key, alpha_key, buy_threshold)
                       for ret_key, alpha_key in horizons}
     result = {"graded": graded, "forward": forward, "forward_unique": forward_unique,
-              "n_unique": len(unique), "sim": summarize_sim(graded)}
+              "n_unique": len(unique), "sim": summarize_sim(graded),
+              "by_signal": summarize_by_signal(graded)}
 
     text = render_scorecard_report(result, date_str)
     html = render_scorecard_html(result, date_str)
@@ -530,7 +641,7 @@ def run(profile: Profile | None = None, *, fetch=None) -> ScorecardResult:
     print(text)
     return ScorecardResult(date=date_str, text=text, html=html, graded=graded,
                            summaries={"forward": forward, "forward_unique": forward_unique,
-                                      "sim": result["sim"]},
+                                      "sim": result["sim"], "by_signal": result["by_signal"]},
                            report_path=report_path)
 
 

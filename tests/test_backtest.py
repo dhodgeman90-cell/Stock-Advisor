@@ -33,6 +33,76 @@ def test_simulate_ticker_closes_on_stop_loss_and_enters_next_day_open():
     assert round(t["return_pct"], 1) == round((92.0 - 101.0) / 101.0 * 100, 1)
 
 
+# ---- enriched backtest (P0-a) ----
+
+FULL_RULES = {
+    "defaults": {"stop_loss_pct": 8, "take_profit_pct": 20, "take_profit_mode": "trailing",
+                 "trailing_stop_pct": 12, "trend_break_fast": 20, "trend_break_slow": 50,
+                 "trend_break_slow_level": "watch",
+                 "momentum_fade": {"rsi_was_above": 70, "volume_dry_ratio": 0.7}},
+    "backtest": {"buy_threshold": 55, "max_hold_days": 60, "cost_pct_per_side": 0.0,
+                 "stcg_tax_pct": 0},   # base ~45 misses; catalyst +15 -> 60 clears it
+}
+CAPS = {"edgar_catalyst": 15, "activist_stake": 12, "risk_high": 20, "risk_medium": 8,
+        "regime": 5, "catalyst": 15, "news_negative": 10, "congress_buy": 18,
+        "congress_sell": 18, "insider_buy": 12, "insider_sell": 10, "analyst": 8,
+        "earnings_soon": 6, "social": 10, "options_flow": 8, "short_squeeze": 10,
+        "estimate_revision": 5}
+THRESH = {"sec_window_days": 30, "earnings_window_days": 5, "options_min_volume": 1000,
+          "options_unusual_ratio": 0.5, "short_high_pct": 20, "social_min_mentions": 25}
+
+
+def test_simulate_ticker_score_of_overrides_entry():
+    df = make_df([100.0] * 70)                       # flat -> base score ~45
+    rules = {**RULES_ENTER_ALWAYS, "backtest": {"buy_threshold": 90, "max_hold_days": 60}}
+    assert backtest.simulate_ticker(df, "T", WEIGHTS, SETTINGS, rules) == []   # base misses 90
+    forced = backtest.simulate_ticker(df, "T", WEIGHTS, SETTINGS, rules,
+                                      score_of=lambda w, t, res: 95.0)
+    assert len(forced) == 1                          # score_of override forces the entry
+
+
+def test_apply_tax_haircuts_gains_only():
+    trades = [{"return_pct": 10.0, "reason": "x", "hold_days": 1},
+              {"return_pct": -10.0, "reason": "y", "hold_days": 1}]
+    out = backtest.apply_tax(trades, 25)
+    assert out[0]["return_pct"] == 7.5               # 10 * (1 - 0.25)
+    assert out[1]["return_pct"] == -10.0             # loss untouched
+    assert backtest.apply_tax(trades, 0) == trades   # off = passthrough
+
+
+def test_enriched_core_edgar_catalyst_triggers_trade_base_misses():
+    # Flat price -> base score ~45 (< 60). An 8-K earnings catalyst dated on the decision
+    # bar adds +15 -> 60, so ONLY the enriched engine enters; base never does.
+    df = make_df([100.0] * 70)                       # bar index 60 == 2024-03-01
+    histories = {"T": df}
+    recent = {"T": {"form": ["8-K"], "items": ["2.02"], "filingDate": ["2024-03-01"]}}
+    core = backtest.enriched_backtest_core(histories, recent, WEIGHTS, FULL_RULES, SETTINGS,
+                                           CAPS, THRESH, presets=["balanced"], sec_window=30)
+    p = core["per_preset"]["balanced"]
+    assert p["enriched"]["summary"]["count"] == 1    # catalyst pushed 45 -> 60, entered
+    assert p["base"]["summary"]["count"] == 0        # base alone never reached 60
+    assert core["coverage_pct"] > 0 and core["n_names"] == 1
+
+
+def test_render_enriched_report_states_verdict_and_disclaimer():
+    core = {
+        "per_preset": {"balanced": {
+            "label": "Balanced", "tax_pct": 25,
+            "enriched": {"summary": backtest.summarize(
+                [{"return_pct": 5.0, "reason": "x", "hold_days": 1}]),
+                "compounded": 5.0, "dd": -3.0},
+            "base": {"summary": backtest.summarize([]), "compounded": 0.0}}},
+        "baseline": 10.0, "buyhold_dd": -20.0, "coverage_pct": 30.0, "n_names": 1,
+        "best_enriched": 5.0, "beat_buyhold": False,
+    }
+    text = backtest.render_enriched_report(core, "2026-07-06", years=4)
+    assert "NO measured edge" in text and "Partial engine" in text
+    assert "not financial advice" in text.lower()
+    beat = backtest.render_enriched_report({**core, "best_enriched": 15.0, "beat_buyhold": True},
+                                           "2026-07-06", years=4)
+    assert "measured edge (partial)" in beat
+
+
 def test_simulate_ticker_no_trade_when_threshold_unreachable():
     prices = [100.0] * 70
     df = make_df(prices)

@@ -109,6 +109,30 @@ def _parse_filings(forms, items, dates, *, today=None, window_days=DEFAULT_WINDO
     return sig
 
 
+def _fdate(date_str):
+    try:
+        return dt.date.fromisoformat(str(date_str)[:10])
+    except (ValueError, TypeError):
+        return None
+
+
+def signal_asof(forms, items, dates, as_of, *, window_days=DEFAULT_WINDOW_DAYS) -> dict:
+    """The SEC signal exactly as it would have looked ON `as_of` — only filings dated in
+    (as_of - window_days, as_of] count. This is the look-ahead guard for the historical
+    backtest: `_parse_filings(today=as_of)` alone still lets a filing dated AFTER as_of
+    through (it only drops filings that are too OLD), which would manufacture fake foresight.
+
+    `as_of` may be a date or an ISO string. Pure — no I/O; feed it a ticker's already-
+    fetched `filings.recent` arrays.
+    """
+    if isinstance(as_of, str):
+        as_of = dt.date.fromisoformat(as_of[:10])
+    kept = [(f, it, d) for f, it, d in zip(forms, items, dates)
+            if _fdate(d) is not None and _fdate(d) <= as_of]
+    return _parse_filings([k[0] for k in kept], [k[1] for k in kept], [k[2] for k in kept],
+                          today=as_of, window_days=window_days)
+
+
 # --- networked helpers -----------------------------------------------------
 def _http_json(url):
     import urllib.request

@@ -43,6 +43,21 @@ def test_log_picks_handles_missing_df(tmp_path):
     assert picks.load_picks(tmp_path)[0]["entry_close"] is None
 
 
+def test_log_picks_records_fired_signal_keys(tmp_path):
+    ranked = [{"ticker": "AAA", "final_score": 88.0, "base_score": 70.0,
+               "congress": {"net_side": "buy"},
+               "adjustment_detail": [{"key": "congress_buy", "points": 18},
+                                     {"key": "catalyst", "points": 15}]}]
+    picks.log_picks(ranked, {"AAA": make_df([10.0, 11.0, 12.5])}, tmp_path, "2026-06-08")
+    assert picks.load_picks(tmp_path)[0]["signals"] == ["congress_buy", "catalyst"]
+
+
+def test_log_picks_signals_default_empty_without_detail(tmp_path):
+    picks.log_picks([{"ticker": "ZZZ", "final_score": 70.0, "base_score": 60.0}],
+                    {}, tmp_path, "2026-06-09")
+    assert picks.load_picks(tmp_path)[0]["signals"] == []
+
+
 def test_load_picks_skips_corrupt_line(tmp_path):
     p = picks.ledger_path(tmp_path)
     p.parent.mkdir(parents=True, exist_ok=True)

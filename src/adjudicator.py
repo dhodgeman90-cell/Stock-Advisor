@@ -27,6 +27,7 @@ def adjudicate(candidate: dict, news: dict, risk: dict, context: dict, caps: dic
             "ticker": ticker, "base_score": base, "final_score": base,
             "vetoed": True, "veto_reason": risk.get("reason", ""),
             "news": news, "risk": risk, "regime": regime, "adjustments": [],
+            "adjustment_detail": [],
             "congress": congress, "social": None, "social_trust": None,
             "analyst": analyst, "insider": insider, "earnings": earnings,
             "edgar": edgar, "options": options, "short": short, "revision": revision,
@@ -34,61 +35,60 @@ def adjudicate(candidate: dict, news: dict, risk: dict, context: dict, caps: dic
 
     final = base
     adjustments = []
+    detail = []   # structured [{"key", "points"}] attribution, parallel to `adjustments`
+
+    def note(key, points, label):
+        """Record one adjustment in both the human-readable `adjustments` list and the
+        structured `detail` (so the scorecard can attribute forward alpha per signal).
+        Returns `points` so the arithmetic stays explicit at the call site:
+        `final += note(...)` — a subtraction is just a negative `points`."""
+        adjustments.append(label)
+        detail.append({"key": key, "points": round(float(points), 2)})
+        return points
 
     level = risk.get("risk_level", "low")
     if level == "high":
-        final -= caps["risk_high"]
-        adjustments.append(f"-{caps['risk_high']:.0f} high risk")
+        final += note("risk_high", -caps["risk_high"], f"-{caps['risk_high']:.0f} high risk")
     elif level == "medium":
-        final -= caps["risk_medium"]
-        adjustments.append(f"-{caps['risk_medium']:.0f} medium risk")
+        final += note("risk_medium", -caps["risk_medium"], f"-{caps['risk_medium']:.0f} medium risk")
 
     if news.get("catalyst"):
-        final += caps["catalyst"]
-        adjustments.append(f"+{caps['catalyst']:.0f} catalyst")
+        final += note("catalyst", caps["catalyst"], f"+{caps['catalyst']:.0f} catalyst")
     if news.get("sentiment") == "neg":
-        final -= caps["news_negative"]
-        adjustments.append(f"-{caps['news_negative']:.0f} negative news")
+        final += note("news_negative", -caps["news_negative"], f"-{caps['news_negative']:.0f} negative news")
 
     if regime == "risk_off":
-        final -= caps["regime"]
-        adjustments.append(f"-{caps['regime']:.0f} risk-off market")
+        final += note("regime_off", -caps["regime"], f"-{caps['regime']:.0f} risk-off market")
     elif regime == "risk_on":
-        final += caps["regime"]
-        adjustments.append(f"+{caps['regime']:.0f} risk-on market")
+        final += note("regime_on", caps["regime"], f"+{caps['regime']:.0f} risk-on market")
 
     # ---- Congress (weighted heavily, per the owner) ----
     if congress and congress.get("net_side") == "buy":
-        final += caps["congress_buy"]
-        adjustments.append(f"+{caps['congress_buy']:.0f} congress buying ({congress.get('n_members', 1)})")
+        final += note("congress_buy", caps["congress_buy"],
+                      f"+{caps['congress_buy']:.0f} congress buying ({congress.get('n_members', 1)})")
     elif congress and congress.get("net_side") == "sell":
-        final -= caps["congress_sell"]
-        adjustments.append(f"-{caps['congress_sell']:.0f} congress selling ({congress.get('n_members', 1)})")
+        final += note("congress_sell", -caps["congress_sell"],
+                      f"-{caps['congress_sell']:.0f} congress selling ({congress.get('n_members', 1)})")
 
     # ---- Corporate insider (Form 4) ----
     if insider and insider.get("net_side") == "buy":
-        final += caps["insider_buy"]
-        adjustments.append(f"+{caps['insider_buy']:.0f} insider buying")
+        final += note("insider_buy", caps["insider_buy"], f"+{caps['insider_buy']:.0f} insider buying")
     elif insider and insider.get("net_side") == "sell":
-        final -= caps["insider_sell"]
-        adjustments.append(f"-{caps['insider_sell']:.0f} insider selling")
+        final += note("insider_sell", -caps["insider_sell"], f"-{caps['insider_sell']:.0f} insider selling")
 
     # ---- Analyst consensus / price targets ----
     if analyst and analyst.get("rating"):
         rating = analyst["rating"]
         upside = analyst.get("upside_pct")
         if rating in _ANALYST_BEAR or (upside is not None and upside < -5):
-            final -= caps["analyst"]
-            adjustments.append(f"-{caps['analyst']:.0f} analysts bearish")
+            final += note("analyst_bear", -caps["analyst"], f"-{caps['analyst']:.0f} analysts bearish")
         elif rating in _ANALYST_BULL and (upside is None or upside > 0):
-            final += caps["analyst"]
-            adjustments.append(f"+{caps['analyst']:.0f} analysts bullish")
+            final += note("analyst_bull", caps["analyst"], f"+{caps['analyst']:.0f} analysts bullish")
 
     # ---- Earnings gap guard (demote NEW entries near a print) ----
     days = (earnings or {}).get("days_until")
     if days is not None and days <= thresholds.get("earnings_window_days", 5):
-        final -= caps["earnings_soon"]
-        adjustments.append(f"-{caps['earnings_soon']:.0f} earnings in {days}d")
+        final += note("earnings_soon", -caps["earnings_soon"], f"-{caps['earnings_soon']:.0f} earnings in {days}d")
 
     # ---- SEC EDGAR filings (primary-source catalysts + activist stakes) ----
     # Additive caps use .get() defaults so an older adjudicator.yaml (predating these
@@ -96,21 +96,17 @@ def adjudicate(candidate: dict, news: dict, risk: dict, context: dict, caps: dic
     if edgar:
         if edgar.get("severe"):
             sev = caps.get("risk_high", 20)
-            final -= sev
-            adjustments.append(f"-{sev:.0f} SEC: {edgar.get('severe_reason') or 'severe filing'}")
+            final += note("edgar_severe", -sev, f"-{sev:.0f} SEC: {edgar.get('severe_reason') or 'severe filing'}")
         if edgar.get("catalyst"):
             cap = caps.get("edgar_catalyst", 15)
-            final += cap
             kinds = ", ".join(edgar.get("catalyst_types") or []) or "8-K"
-            adjustments.append(f"+{cap:.0f} SEC 8-K ({kinds})")
+            final += note("edgar_catalyst", cap, f"+{cap:.0f} SEC 8-K ({kinds})")
         elif edgar.get("negative"):
             cap = caps.get("edgar_catalyst", 15)
-            final -= cap
-            adjustments.append(f"-{cap:.0f} SEC 8-K (adverse)")
+            final += note("edgar_adverse", -cap, f"-{cap:.0f} SEC 8-K (adverse)")
         if edgar.get("activist"):
             cap = caps.get("activist_stake", 12)
-            final += cap
-            adjustments.append(f"+{cap:.0f} activist 13D stake")
+            final += note("activist_stake", cap, f"+{cap:.0f} activist 13D stake")
 
     # ---- Options flow (free yfinance chains; only when volume is real & unusual) ----
     if options:
@@ -119,11 +115,9 @@ def adjudicate(candidate: dict, news: dict, risk: dict, context: dict, caps: dic
         if total_vol >= thresholds.get("options_min_volume", 1000) and unusual:
             cap = caps.get("options_flow", 8)
             if options.get("direction") == "bullish":
-                final += cap
-                adjustments.append(f"+{cap:.0f} unusual call flow")
+                final += note("options_bull", cap, f"+{cap:.0f} unusual call flow")
             elif options.get("direction") == "bearish":
-                final -= cap
-                adjustments.append(f"-{cap:.0f} unusual put flow")
+                final += note("options_bear", -cap, f"-{cap:.0f} unusual put flow")
 
     # ---- Short interest: squeeze setup (corroborated) vs crowded short (weak chart) ----
     if short and short.get("pct_float") is not None \
@@ -131,21 +125,17 @@ def adjudicate(candidate: dict, news: dict, risk: dict, context: dict, caps: dic
         cap = caps.get("short_squeeze", 10)
         wsb_rising = bool(wsb and (wsb.get("mentions_change") or 0) > 0)
         if base >= 60 or wsb_rising:
-            final += cap
-            adjustments.append(f"+{cap:.0f} squeeze setup ({short['pct_float']:.0f}% short)")
+            final += note("squeeze_setup", cap, f"+{cap:.0f} squeeze setup ({short['pct_float']:.0f}% short)")
         else:
-            final -= cap
-            adjustments.append(f"-{cap:.0f} crowded short ({short['pct_float']:.0f}% short)")
+            final += note("crowded_short", -cap, f"-{cap:.0f} crowded short ({short['pct_float']:.0f}% short)")
 
     # ---- Analyst estimate-revision momentum (drift beats a static rating) ----
     if revision:
         cap = caps.get("estimate_revision", 5)
         if revision.get("revision_trend") == "up":
-            final += cap
-            adjustments.append(f"+{cap:.0f} estimates rising")
+            final += note("estimates_up", cap, f"+{cap:.0f} estimates rising")
         elif revision.get("revision_trend") == "down":
-            final -= cap
-            adjustments.append(f"-{cap:.0f} estimates falling")
+            final += note("estimates_down", -cap, f"-{cap:.0f} estimates falling")
 
     # ---- r/wallstreetbets, scaled by situational trust ----
     social_trust = None
@@ -161,9 +151,11 @@ def adjudicate(candidate: dict, news: dict, risk: dict, context: dict, caps: dic
         if contrarian and applied:
             final -= applied
             social_summary = f"-{applied:g} WSB hype (contrarian, trust {social_trust:.0%})"
+            detail.append({"key": "wsb_contrarian", "points": round(-applied, 2)})
         elif rising and applied:
             final += applied
             social_summary = f"+{applied:g} WSB buzz (trust {social_trust:.0%})"
+            detail.append({"key": "wsb_buzz", "points": round(applied, 2)})
         if social_summary:
             adjustments.append(social_summary)
 
@@ -173,6 +165,7 @@ def adjudicate(candidate: dict, news: dict, risk: dict, context: dict, caps: dic
         "ticker": ticker, "base_score": base, "final_score": final,
         "vetoed": False, "veto_reason": "",
         "news": news, "risk": risk, "regime": regime, "adjustments": adjustments,
+        "adjustment_detail": detail,
         "congress": congress, "social": social_summary, "social_trust": social_trust,
         "analyst": analyst, "insider": insider, "earnings": earnings,
         "edgar": edgar, "options": options, "short": short, "revision": revision,

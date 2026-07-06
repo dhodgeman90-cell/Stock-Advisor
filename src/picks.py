@@ -87,6 +87,9 @@ def log_picks(ranked, df_by_ticker, data_dir, date_str, *, source="briefing") ->
             "base_score": round(float(r.get("base_score", r["final_score"])), 1),
             "conviction": rotation._add_conviction(r),
             "entry_close": _entry_close(df_by_ticker.get(ticker)),
+            # Which adjudicator caps fired on this pick, for per-signal scorecard
+            # attribution. Empty for report-backfilled picks (the .md has no detail).
+            "signals": [d.get("key") for d in (r.get("adjustment_detail") or []) if d.get("key")],
             "source": source,
         })
     return append_records(records, data_dir)

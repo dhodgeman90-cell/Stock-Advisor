@@ -1,3 +1,5 @@
+import time
+
 from src import fetchpool
 
 
@@ -30,3 +32,21 @@ def test_fetch_map_default_callable_gives_fresh_objects():
 
 def test_fetch_map_empty_input():
     assert fetchpool.fetch_map([], lambda t: t) == {}
+
+
+def test_fetch_map_logs_dropped_ticker_instead_of_silent():
+    logs = []
+    fetchpool.fetch_map(["BAD"], lambda t: 1 / 0, default=0, log=logs.append)
+    assert logs and "BAD" in logs[0] and "failed" in logs[0]
+
+
+def test_fetch_map_times_out_slow_call_and_logs():
+    logs = []
+    out = fetchpool.fetch_map(["SLOW"], lambda t: time.sleep(0.2) or "done",
+                              default="D", timeout=0.01, log=logs.append)
+    assert out == {"SLOW": "D"} and "timed out" in logs[0]
+
+
+def test_fetch_map_silent_when_log_none():
+    out = fetchpool.fetch_map(["BAD"], lambda t: 1 / 0, default="X", log=None)
+    assert out == {"BAD": "X"}       # no crash, no output

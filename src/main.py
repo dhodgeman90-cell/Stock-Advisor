@@ -6,13 +6,15 @@ import pandas as pd
 
 from src import (config, data, scoring, news, agents, adjudicator, briefing,
                  exits, broker, social, congress, insights, market, rotation,
-                 objectives, onboarding, edgar, options, fetchpool, picks)
+                 objectives, onboarding, edgar, options, fetchpool, picks, scorecard)
 from src.profile import Profile
 from src.results import RunResult
 
 ROOT = Path(__file__).resolve().parent.parent
 
 MAX_ADDS = 3   # most names the daily rotation will recommend buying into
+ENRICH_TIMEOUT_S = 45   # per-ticker ceiling for the parallel signal enrichment (secondary
+                        # bound; data.fetch_history's network timeout is the real hang guard)
 
 
 def _should_skip_today(today: dt.date, force: bool = False) -> bool:
@@ -290,6 +292,7 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None) -> R
         [s["ticker"] for s in shortlist],
         lambda t: _enrich_candidate(t, cik_map, sec_window),
         default=_neutral_bundle,
+        timeout=ENRICH_TIMEOUT_S,
     )
     cand_rows = []   # (scored_row, signals, projected_score)
     for s in shortlist:
@@ -389,14 +392,29 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None) -> R
         holdings, ranked, conviction=exit_rules["backtest"]["buy_threshold"], max_adds=MAX_ADDS,
     )
 
+    # Reality-check header: grade our OWN past picks vs SPY and put the number at the top of
+    # the briefing. Reuse the histories already fetched this run (cache-first) so this adds
+    # only a SPY pull, not a full refetch, and never let a scorecard hiccup break the email.
+    def _sc_fetch(ticker, days):
+        cached = df_by_ticker.get(ticker)
+        return cached if cached is not None else fetch(ticker, days)
+
+    scorecard_summary = None
+    try:
+        scorecard_summary = scorecard.briefing_summary(profile, fetch=_sc_fetch)
+    except Exception as e:
+        print(f"[scorecard summary failed: {e}]")
+
     tone = objectives.tone_line(objective)
     text = briefing.render_briefing(
         ranked, vetoed, others, excluded, date_str, context["regime"], context["note"],
         holdings=holdings, rotation_plan=rotation_plan, discovery=discovery, tone_line=tone,
+        scorecard_summary=scorecard_summary,
     )
     html = briefing.render_briefing_html(
         ranked, vetoed, others, excluded, date_str, context["regime"], context["note"],
         holdings=holdings, rotation_plan=rotation_plan, discovery=discovery, tone_line=tone,
+        scorecard_summary=scorecard_summary,
     )
     report_path = reports_dir / f"{date_str}.md"
     report_path.write_text(text, encoding="utf-8")

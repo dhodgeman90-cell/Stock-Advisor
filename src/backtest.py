@@ -5,11 +5,26 @@ from pathlib import Path
 
 import pandas as pd
 
-from src import config, data, scoring, exits
+from src import config, data, scoring, exits, adjudicator, edgar, objectives
 
 ROOT = Path(__file__).resolve().parent.parent
 MIN_HISTORY = 60   # 50 rows for the SMA-50 warm-up + ~10 days before the first decision
 _EXIT_LEVELS = {"sell", "trim"}   # signal levels that close a backtest trade
+
+# The ONLY adjudicator signals that can be honestly reconstructed point-in-time from free
+# data for a historical backtest. Everything else — congress, insider, analyst, short
+# interest, options flow, estimate revisions, WSB, and the AI news/risk/social agents — has
+# no free as-of history (yfinance/.info are current snapshots, ApeWisdom has no archive), so
+# it is EXCLUDED. Stamping today's values onto past bars would be look-ahead that fabricates
+# alpha. Macro regime is reconstructable but deferred (only ±5). Coverage is reported so a
+# partial backtest is never mistaken for validation of the full enriched engine.
+_RECONSTRUCTABLE_CAPS = ("edgar_catalyst", "activist_stake", "risk_high")   # risk_high via 8-K severe
+
+# Neutral views fed to the adjudicator for the un-reconstructable AI signals, so only the
+# base score + point-in-time EDGAR actually move the enriched score.
+_BT_NEUTRAL_NEWS = {"catalyst": False, "sentiment": "neutral", "summary": ""}
+_BT_NEUTRAL_RISK = {"risk_level": "low", "veto": False, "reason": ""}
+_BT_CONTEXT = {"regime": "neutral", "note": ""}
 
 
 def _load_history(ticker, days, data_dir):
@@ -37,13 +52,17 @@ def _net_return(entry_price, exit_price, rules) -> float:
     return raw - cost
 
 
-def simulate_ticker(df, ticker, weights, settings, rules) -> list:
+def simulate_ticker(df, ticker, weights, settings, rules, *, score_of=None) -> list:
     """Trade-by-trade replay for one ticker. Returns a list of closed trades.
 
-    Entry: when base score >= buy_threshold and no trade is open, buy at the
+    Entry: when the decision score >= buy_threshold and no trade is open, buy at the
     NEXT day's open (no look-ahead). Exit: on a 'sell'-level signal or a
     take_profit, evaluated against that day's close; force-close at max_hold_days.
     One open trade per ticker at a time.
+
+    `score_of(window, ticker, base_res) -> float` overrides the entry score. Default
+    (None) uses the base technical score — the original behaviour, byte-for-byte. The
+    enriched backtest passes a reconstructor that runs the real adjudicator per bar.
     """
     bt = rules["backtest"]
     threshold = float(bt["buy_threshold"])
@@ -57,7 +76,11 @@ def simulate_ticker(df, ticker, weights, settings, rules) -> list:
         window = df.iloc[: i + 1]
         if open_trade is None:
             res = scoring.score_ticker(window, ticker, weights, settings)
-            if (not res.get("excluded")) and res["score"] >= threshold and (i + 1) < n:
+            if not res.get("excluded"):
+                entry_score = res["score"] if score_of is None else score_of(window, ticker, res)
+            else:
+                entry_score = None      # liquidity/price floor failed — never enter
+            if entry_score is not None and entry_score >= threshold and (i + 1) < n:
                 entry_idx = i + 1
                 open_trade = {
                     "entry_idx": entry_idx,
@@ -333,5 +356,204 @@ def run(watchlist_name=None) -> str:
     return text
 
 
+# ===================== Enriched backtest (P0-a) =============================
+# Replays the ADJUDICATED final_score (base technicals + point-in-time SEC EDGAR), not just
+# the base score, so we can ask the real question: does the engine we actually trade beat
+# buy-and-hold on history — after costs AND the short-term-gains tax that buy-and-hold
+# avoids? It can only reconstruct the free, point-in-time signals; coverage is reported so a
+# partial result is never mistaken for validation of the full engine.
+
+def apply_tax(trades, tax_pct) -> list:
+    """Apply a flat short-term-gains haircut to WINNING trades (losses unchanged). This is
+    the tax drag active trading pays and buy-and-hold does not — the hurdle an edge must clear."""
+    if not tax_pct:
+        return list(trades)
+    out = []
+    for t in trades:
+        r = t["return_pct"]
+        out.append({**t, "return_pct": r * (1 - tax_pct / 100.0) if r > 0 else r})
+    return out
+
+
+def _cap_coverage(caps) -> float:
+    """Rough % of the adjudicator cap budget the enriched backtest can reconstruct."""
+    total = sum(abs(float(v)) for v in caps.values())
+    covered = sum(abs(float(caps.get(k, 0))) for k in _RECONSTRUCTABLE_CAPS)
+    return (100.0 * covered / total) if total else 0.0
+
+
+def _edgar_enricher(recent, caps, thresholds, sec_window):
+    """Return score_of(window, ticker, base_res) that reconstructs the enriched final_score
+    from base technicals + point-in-time EDGAR only. `recent` = the ticker's SEC
+    filings.recent arrays (fetched once). Un-reconstructable signals are fed neutral/None."""
+    forms = (recent or {}).get("form", [])
+    items = (recent or {}).get("items", [])
+    dates = (recent or {}).get("filingDate", [])
+
+    def score_of(window, ticker, res):
+        bar_date = window.index[-1].date()
+        sig = edgar.signal_asof(forms, items, dates, bar_date, window_days=sec_window)
+        # Look-ahead is a BUILD failure, not a silent bug: no reconstructed filing may
+        # postdate the bar we decide on. signal_asof guarantees this; the assert makes any
+        # future regression fail loudly instead of quietly manufacturing alpha.
+        assert sig["as_of"] is None or sig["as_of"] <= bar_date.isoformat(), \
+            f"look-ahead: EDGAR as_of {sig['as_of']} > bar {bar_date}"
+        adjd = adjudicator.adjudicate(
+            {"ticker": ticker, "score": res["score"]},
+            dict(_BT_NEUTRAL_NEWS), dict(_BT_NEUTRAL_RISK), dict(_BT_CONTEXT), caps,
+            thresholds=thresholds, edgar=sig,
+        )
+        return adjd["final_score"]
+    return score_of
+
+
+def enriched_backtest_core(histories, recent_by_ticker, base_weights, base_rules, settings,
+                           caps, thresholds, *, presets=None, sec_window=30) -> dict:
+    """Pure (no network): replay the enriched engine over `histories` for each objective
+    preset, alongside the base-score engine, both cost- and STCG-tax-adjusted, vs an
+    equal-weight buy-and-hold baseline. `recent_by_ticker` maps ticker -> SEC filings.recent
+    arrays (or {}). Returns a structured result for render_enriched_report."""
+    presets = presets or objectives.ORDER
+    baseline = buy_and_hold(histories)
+    buyhold_dd = max_drawdown(buy_and_hold_equity_curve(histories))
+
+    per_preset = {}
+    for key in presets:
+        weights_p = objectives.apply_weights(base_weights, key)
+        rules_p = objectives.apply_exit_rules(base_rules, key)
+        tax = float(rules_p["backtest"].get("stcg_tax_pct", 0))
+        enr_trades, base_trades = [], []
+        for ticker, df in histories.items():
+            enricher = _edgar_enricher(recent_by_ticker.get(ticker, {}), caps, thresholds, sec_window)
+            enr_trades += apply_tax(
+                simulate_ticker(df, ticker, weights_p, settings, rules_p, score_of=enricher), tax)
+            base_trades += apply_tax(
+                simulate_ticker(df, ticker, weights_p, settings, rules_p), tax)
+        per_preset[key] = {
+            "label": objectives.get(key)["label"],
+            "tax_pct": tax,
+            "enriched": {"summary": summarize(enr_trades),
+                         "compounded": compounded_per_name(enr_trades),
+                         "dd": max_drawdown(strategy_equity_curve(histories, enr_trades))},
+            "base": {"summary": summarize(base_trades),
+                     "compounded": compounded_per_name(base_trades)},
+        }
+    best = max((p["enriched"]["compounded"] for p in per_preset.values()), default=0.0)
+    return {
+        "per_preset": per_preset, "baseline": baseline, "buyhold_dd": buyhold_dd,
+        "coverage_pct": _cap_coverage(caps), "n_names": len(histories),
+        "best_enriched": best, "beat_buyhold": best > baseline,
+    }
+
+
+def render_enriched_report(core, date_str, label="default", *, years=None, date_range=None) -> str:
+    win = f"{date_range[0]} → {date_range[1]}" if date_range else f"~{years}y"
+    tax_pct = next((p["tax_pct"] for p in core["per_preset"].values()), 0)
+    L = [
+        f"# Stock Advisor — Enriched Backtest ({label}, {date_str})", "",
+        f"Window: **{win}** · names: **{core['n_names']}**", "",
+        "> **Partial engine — read this first.** This replays the base technical score PLUS "
+        "the only signals honestly reconstructable point-in-time on free data: SEC EDGAR "
+        f"8-K / 13D (real filing dates). Estimated cap-budget coverage: **~{core['coverage_pct']:.0f}%**. "
+        "EXCLUDED (no free as-of history): congress, insider, analyst, short interest, options "
+        "flow, estimate revisions, WSB, and the AI news/risk/social agents; macro regime is "
+        "deferred. So this is NOT validation of the full enriched engine — only of the part we "
+        "can test honestly against history.", "",
+        "### Strategy vs buy-and-hold, per objective preset (after cost + short-term tax)",
+        f"Equal-weight buy-and-hold baseline (untaxed): **{core['baseline']:+.1f}%** per name "
+        f"· max drawdown **{core['buyhold_dd']:+.1f}%**", "",
+        "| Preset | Enriched | Base | vs B&H | Win% | Expectancy | Trades | MaxDD |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for key in objectives.ORDER:
+        p = core["per_preset"].get(key)
+        if not p:
+            continue
+        e, b, s = p["enriched"], p["base"], p["enriched"]["summary"]
+        L.append(f"| {p['label']} | {e['compounded']:+.1f}% | {b['compounded']:+.1f}% | "
+                 f"{e['compounded'] - core['baseline']:+.1f}% | {s['win_rate']:.0f}% | "
+                 f"{s['expectancy']:+.1f}% | {s['count']} | {e['dd']:+.1f}% |")
+    L += ["", f"_Short-term-gains haircut on winning trades: {tax_pct:.0f}% "
+              "(buy-and-hold pays none — that's the hurdle daily trading must clear)._", ""]
+
+    if core["beat_buyhold"]:
+        L += ["## Verdict — a measured edge (partial)",
+              f"The best preset's enriched, after-cost/after-tax return "
+              f"(**{core['best_enriched']:+.1f}%**) beat equal-weight buy-and-hold "
+              f"(**{core['baseline']:+.1f}%**) over this window — on the reconstructable subset "
+              "ONLY (~coverage above). That clears the P0-a gate to *consider* P1 work, but "
+              "treat it cautiously: partial coverage, one window, is not proof."]
+    else:
+        L += ["## Verdict — NO measured edge",
+              f"No preset's enriched, after-cost/after-tax return beat equal-weight "
+              f"buy-and-hold (**{core['baseline']:+.1f}%**) over this window "
+              f"(best was **{core['best_enriched']:+.1f}%**). Per the plan's kill criterion, "
+              "daily-trading these names shows **no measured edge here — do not start P1 "
+              "feature work on this evidence.** Grow the ledger (P0-b) and re-check across "
+              "more regimes first."]
+    L += ["",
+          "> Caveat: partial-engine, single-window, free-data backtest. Overfitting and "
+          "survivorship risk remain — confirm against the live scorecard as the ledger grows.",
+          "", "_Information only — not financial advice._"]
+    return "\n".join(L) + "\n"
+
+
+def run_enriched(watchlist_name=None, *, years=None) -> str:
+    wl = config.load_watchlist(name=watchlist_name)
+    base_weights = config.load_weights()
+    base_rules = config.load_exit_rules()
+    caps = config.load_adjudicator()
+    thresholds = config.load_signals()["thresholds"]
+    settings = wl["settings"]
+    sec_window = thresholds.get("sec_window_days", edgar.DEFAULT_WINDOW_DAYS)
+    years = int(years or base_rules["backtest"].get("enriched_years", 4))
+    data_dir = ROOT / "data"
+
+    histories, sources = {}, {}
+    for ticker in wl["tickers"]:
+        df, source = _load_history(ticker, years * 365, data_dir)
+        sources[ticker] = source
+        if df is not None:
+            histories[ticker] = df
+
+    # SEC filings per ticker (fetched once each; degrade to empty -> neutral EDGAR on failure).
+    cik_map = edgar.load_cik_map()
+    recent_by_ticker = {}
+    for ticker in histories:
+        try:
+            cik = cik_map.get(ticker.upper())
+            recent_by_ticker[ticker] = (
+                edgar._default_submissions_fetch(cik).get("filings", {}).get("recent", {})
+                if cik else {})
+        except Exception:
+            recent_by_ticker[ticker] = {}
+
+    core = enriched_backtest_core(histories, recent_by_ticker, base_weights, base_rules,
+                                  settings, caps, thresholds, sec_window=sec_window)
+    label = watchlist_name or "default"
+    date_str = dt.date.today().isoformat()
+    date_range = None
+    if histories:
+        starts = [df.index[0] for df in histories.values()]
+        ends = [df.index[-1] for df in histories.values()]
+        date_range = (str(min(starts).date()), str(max(ends).date()))
+    text = render_enriched_report(core, date_str, label=label, years=years, date_range=date_range)
+
+    reports_dir = ROOT / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    (reports_dir / f"backtest-enriched-{label}-{date_str}.md").write_text(text, encoding="utf-8")
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    print(text)
+    return text
+
+
 if __name__ == "__main__":
-    run(sys.argv[1] if len(sys.argv) > 1 else None)
+    _args = sys.argv[1:]
+    if "--enriched" in _args:
+        _rest = [a for a in _args if a != "--enriched"]
+        run_enriched(_rest[0] if _rest else None)
+    else:
+        run(_args[0] if _args else None)

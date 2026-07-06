@@ -53,6 +53,47 @@ def test_html_tone_line_present_when_set():
     assert "Aggressive lens" in out
 
 
+# ---- reality-check header (P0-c) ----
+
+def _sc(**kw):
+    base = {"n_picks": 40, "n_matured": 40, "enough": True, "cohort_alpha_5d": -1.4,
+            "beat_spy_rate": 40.0, "sim_expectancy": -3.1, "sim_win": 10.0,
+            "underperforming": True}
+    return {**base, **kw}
+
+
+def test_reality_check_says_underperforming_with_numbers():
+    out = briefing.render_reality_check(_sc())
+    assert "underperforming SPY" in out
+    assert "-1.4%" in out and "-3.1%" in out          # alpha + expectancy surfaced
+
+
+def test_reality_check_says_beating_when_positive_alpha():
+    out = briefing.render_reality_check(_sc(cohort_alpha_5d=2.0, underperforming=False))
+    assert "beating SPY" in out
+
+
+def test_reality_check_withholds_numbers_below_sample_floor():
+    out = briefing.render_reality_check(_sc(n_matured=8, enough=False))
+    assert "too few to judge" in out
+    assert "-1.4%" not in out                          # no misleading percentage
+
+
+def test_reality_check_empty_when_no_summary():
+    assert briefing.render_reality_check(None) == ""
+
+
+def test_render_briefing_includes_reality_check_at_top():
+    out = briefing.render_briefing(**_tone_args(), scorecard_summary=_sc())
+    assert "Reality check" in out
+    assert out.index("Reality check") < out.index("Today's rotation")   # above the picks
+
+
+def test_render_briefing_html_includes_reality_check():
+    out = briefing.render_briefing_html(**_tone_args(), scorecard_summary=_sc())
+    assert "Reality check" in out and "underperforming SPY" in out
+
+
 def test_send_email_logs_in_and_sends():
     fake = FakeSMTP()
     briefing.send_email(

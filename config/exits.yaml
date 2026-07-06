@@ -12,6 +12,12 @@ defaults:
 backtest:
   buy_threshold: 65           # simulate a buy when base score >= this
   max_hold_days: 250          # generous cap (~1yr) so the trailing stop, not a clock, exits winners
-  window_years: 2             # how much history to replay
+  window_years: 2             # how much history to replay (base backtest)
   cost_pct_per_side: 0.1      # 0.2% round-trip slippage/commission
   baseline: equal_weight_watchlist
+  # Flat short-term-capital-gains haircut on WINNING trades, applied only by the ENRICHED
+  # backtest (run_enriched). This is the tax drag daily trading pays that buy-and-hold does
+  # not — the hurdle any active edge must clear. 0 = off (base backtest is unaffected).
+  stcg_tax_pct: 25
+  enriched_years: 4           # longer window for the enriched backtest, to span both the
+                              # 2022 drawdown and the 2023-24 rally (don't overfit one regime)

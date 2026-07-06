@@ -158,8 +158,59 @@ def render_discovery_section(congress_movers, wsb_movers) -> str:
     return "\n".join(L)
 
 
+def _pct(v):
+    return "n/a" if v is None else f"{v:+.1f}%"
+
+
+def _rate(v):
+    return "n/a" if v is None else f"{v:.0f}%"
+
+
+def render_reality_check(summary) -> str:
+    """Markdown 'Reality check' block: how the app's OWN past picks are doing vs SPY, shown
+    at the decision moment so the reader can't act on today's list without seeing the record.
+    '' when nothing is logged yet; a plain 'too few to judge' note below the sample floor."""
+    if not summary:
+        return ""
+    L = ["## 🧭 Reality check"]
+    if not summary.get("enough"):
+        L.append(f"_{summary.get('n_matured', 0)} matured picks logged — too few to judge yet "
+                 "(building toward 30+). Numbers withheld until the sample is meaningful._")
+        return "\n".join(L)
+    verdict = "underperforming SPY" if summary["underperforming"] else "beating SPY"
+    L.append(f"This system's own picks are currently **{verdict}**. Read this before acting "
+             "on today's list.")
+    L.append(f"- +5d vs SPY (actionable cohort): {_pct(summary['cohort_alpha_5d'])} alpha · "
+             f"beat-SPY {_rate(summary['beat_spy_rate'])} · {summary['n_matured']} matured picks")
+    L.append(f"- Exit-rule sim: expectancy {_pct(summary['sim_expectancy'])} · "
+             f"win {_rate(summary['sim_win'])}")
+    return "\n".join(L)
+
+
+def _reality_check_html(summary, e) -> str:
+    """Styled reality-check banner for the HTML email; '' when nothing is logged."""
+    if not summary:
+        return ""
+    if not summary.get("enough"):
+        return ('<div style="background:#f3f4f6;border-radius:8px;padding:11px 13px;'
+                'margin-bottom:14px;font-size:12.5px;color:#4b5563;">'
+                f'🧭 <b>Reality check:</b> {summary.get("n_matured", 0)} matured picks — too few '
+                'to judge yet (building toward 30+).</div>')
+    under = summary["underperforming"]
+    bg, fg = ("#fef2f2", "#7f1d1d") if under else ("#ecfdf5", "#065f46")
+    verdict = "underperforming SPY" if under else "beating SPY"
+    return (f'<div style="background:{bg};border-radius:8px;padding:11px 13px;margin-bottom:14px;'
+            f'font-size:12.5px;color:{fg};">'
+            f'🧭 <b>Reality check:</b> this system\'s own picks are currently <b>{verdict}</b>. '
+            f'+5d cohort alpha {_pct(summary["cohort_alpha_5d"])} · '
+            f'beat-SPY {_rate(summary["beat_spy_rate"])} · '
+            f'exit-sim expectancy {_pct(summary["sim_expectancy"])} · win {_rate(summary["sim_win"])} · '
+            f'{summary["n_matured"]} matured picks.</div>')
+
+
 def render_briefing(ranked, vetoed, others, excluded, date_str, regime, regime_note,
-                    holdings=None, rotation_plan=None, discovery=None, tone_line=None) -> str:
+                    holdings=None, rotation_plan=None, discovery=None, tone_line=None,
+                    scorecard_summary=None) -> str:
     """Render the enriched daily briefing (Phase 2 + Phase 3 holdings + signal upgrade).
 
     `ranked` is pre-sorted by final_score. The rotation plan and holdings lead the
@@ -173,6 +224,9 @@ def render_briefing(ranked, vetoed, others, excluded, date_str, regime, regime_n
     ]
     if tone_line:
         L.append(f"_{tone_line}_")
+    rc = render_reality_check(scorecard_summary)
+    if rc:
+        L += ["", rc]
     L += [
         "",
         render_rotation_section(rotation_plan),
@@ -344,7 +398,7 @@ def _discovery_html(congress_movers, wsb_movers, e) -> str:
 
 def render_briefing_html(ranked, vetoed, others, excluded, date_str, regime,
                          regime_note, holdings=None, rotation_plan=None, discovery=None,
-                         tone_line=None) -> str:
+                         tone_line=None, scorecard_summary=None) -> str:
     """Styled HTML version of the daily briefing (plain-text fallback stays render_briefing)."""
     e = html.escape
     green = "#0f3d2e"
@@ -360,6 +414,7 @@ def render_briefing_html(ranked, vetoed, others, excluded, date_str, regime,
         f'<div style="font-size:12.5px;color:#a7d7c5;margin-top:2px;">'
         f'{e(date_str)} &middot; {e(regime)} — {e(regime_note)}</div>{tone_html}</div>',
         '<div style="padding:18px 24px 22px;">',
+        _reality_check_html(scorecard_summary, e),
         _rotation_html(rotation_plan, e, green),
         '<div style="font-size:14px;font-weight:700;color:#0f172a;margin:18px 0 10px;">'
         '📊 Your holdings</div>',
