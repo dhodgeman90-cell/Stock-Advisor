@@ -260,3 +260,68 @@ def test_render_scorecard_report_omits_independent_block_when_absent():
     text = scorecard.render_scorecard_report(result, "2026-06-24")
     assert "Independent picks" not in text
     assert "not financial advice" in text.lower()
+
+
+# ---- drawdown-from-high timing signal ----
+
+def test_drawdown_from_high_measures_dip_below_recent_high():
+    df = _df(["2026-06-08", "2026-06-09", "2026-06-10"], [100.0, 120.0, 100.0])
+    assert round(scorecard._drawdown_from_high(df, 2), 1) == -16.7   # bought 16.7% under the run-up
+
+
+def test_drawdown_from_high_is_zero_at_a_new_high():
+    df = _df(["2026-06-08", "2026-06-09", "2026-06-10"], [100.0, 110.0, 120.0])
+    assert scorecard._drawdown_from_high(df, 2) == 0.0
+
+
+def test_drawdown_from_high_is_none_without_prior_bars():
+    df = _df(["2026-06-08"], [100.0])
+    assert scorecard._drawdown_from_high(df, 0) is None
+
+
+def test_dd_band_buckets():
+    assert scorecard._dd_band(None) == "unknown"
+    assert scorecard._dd_band(0.0) == "0 to -3%"
+    assert scorecard._dd_band(-5.0) == "-3 to -10%"
+    assert scorecard._dd_band(-20.0) == "<-10%"
+
+
+def test_grade_pick_tags_drawdown_band():
+    dates = ["2026-06-08", "2026-06-09", "2026-06-10"]
+    df = _df(dates, [100.0, 120.0, 100.0])     # pick lands on the 100 dip after a 120 high
+    spy = _df(dates, [400.0, 400.0, 400.0])
+    g = scorecard.grade_pick(
+        {"date": "2026-06-10", "ticker": "T", "final_score": 90.0}, df, spy, RULES)
+    assert round(g["drawdown_from_high"], 1) == -16.7
+    assert g["dd_band"] == "<-10%"
+
+
+def test_summarize_scorecard_splits_by_drawdown():
+    graded = [
+        {"band": ">=80", "dd_band": "<-10%", "final_score": 90, "ret_5d": 10.0, "alpha_5d": 5.0, "conviction": "high"},
+        {"band": ">=80", "dd_band": "<-10%", "final_score": 85, "ret_5d": 8.0, "alpha_5d": 3.0, "conviction": "normal"},
+        {"band": "60-79", "dd_band": "0 to -3%", "final_score": 70, "ret_5d": -4.0, "alpha_5d": -2.0, "conviction": "normal"},
+    ]
+    s = scorecard.summarize_scorecard(graded, "ret_5d", "alpha_5d")
+    assert s["by_drawdown"]["<-10%"]["n"] == 2
+    assert s["by_drawdown"]["0 to -3%"]["n"] == 1
+    assert round(s["by_drawdown"]["<-10%"]["summary"]["win_rate"], 0) == 100   # both dips positive
+
+
+def test_render_scorecard_shows_drawdown_breakdown():
+    graded = [{
+        "date": "2026-06-08", "ticker": "AAA", "final_score": 90.0, "conviction": "high",
+        "band": ">=80", "dd_band": "<-10%", "drawdown_from_high": -12.0,
+        "entry": 100.0, "entry_date": "2026-06-08",
+        "ret_1d": 1.0, "ret_5d": 3.0, "ret_21d": None, "ret_todate": 5.0,
+        "alpha_1d": 0.5, "alpha_5d": 1.0, "alpha_21d": None, "alpha_todate": 2.0,
+        "sim": {"status": "closed", "reason": "stop_loss", "hold_days": 4, "return_pct": -5.0},
+    }]
+    forward = {k: scorecard.summarize_scorecard(graded, k, k.replace("ret", "alpha"), 65)
+               for k in ("ret_1d", "ret_5d", "ret_21d")}
+    result = {"graded": graded, "forward": forward, "forward_unique": forward,
+              "n_unique": 1, "sim": scorecard.summarize_sim(graded)}
+    text = scorecard.render_scorecard_report(result, "2026-06-24")
+    html = scorecard.render_scorecard_html(result, "2026-06-24")
+    assert "drawdown" in text.lower()
+    assert "drawdown" in html.lower()

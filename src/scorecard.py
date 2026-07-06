@@ -50,6 +50,8 @@ DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})$")   # report stem; skips backtest-*
 # Forward horizons in trading bars.
 HORIZONS = [("1d", 1), ("5d", 5), ("21d", 21)]
 BANDS = (">=80", "60-79", "<60")
+DD_LOOKBACK = 63                          # trailing bars (~3 months) defining the "recent high"
+DD_BANDS = ("0 to -3%", "-3 to -10%", "<-10%")   # how far below that high the pick was bought
 _EXIT_LEVELS = {"sell", "trim"}   # signal levels that close a simulated trade
 
 
@@ -178,6 +180,29 @@ def _band(score) -> str:
     return "<60"
 
 
+def _drawdown_from_high(df, entry_pos, lookback=DD_LOOKBACK) -> float | None:
+    """% the entry close sits below the highest close in the trailing `lookback` bars —
+    0 at a fresh high, negative when the pick was bought into a dip. None when there is no
+    prior bar to judge against (entry is the first bar of the series)."""
+    if df is None or entry_pos is None or entry_pos < 1:
+        return None
+    lo = max(0, entry_pos - lookback + 1)
+    high = float(df["Close"].iloc[lo:entry_pos + 1].max())
+    if high <= 0:
+        return None
+    return (float(df["Close"].iloc[entry_pos]) / high - 1.0) * 100.0
+
+
+def _dd_band(dd) -> str:
+    if dd is None:
+        return "unknown"
+    if dd >= -3:
+        return "0 to -3%"
+    if dd >= -10:
+        return "-3 to -10%"
+    return "<-10%"
+
+
 def grade_pick(pick, df, spy_df, rules) -> dict:
     """Grade one pick: forward returns + SPY alpha (view 1) and an exit-rule sim (view 2)."""
     out = {
@@ -193,6 +218,9 @@ def grade_pick(pick, df, spy_df, rules) -> dict:
 
     out["entry"] = round(float(df["Close"].iloc[entry_pos]), 4)
     out["entry_date"] = str(df.index[entry_pos].date())
+    dd = _drawdown_from_high(df, entry_pos)
+    out["drawdown_from_high"] = dd            # entry vs its trailing 63-bar high (timing signal)
+    out["dd_band"] = _dd_band(dd)
 
     spy_pos = _pos_on_or_after(spy_df, pick["date"])
     for label, h in HORIZONS:
@@ -250,6 +278,7 @@ def summarize_scorecard(graded, ret_key="ret_5d", alpha_key="alpha_5d",
     by_conviction = {c: block([g for g in matured if g.get("conviction") == c])
                      for c in ("high", "normal")
                      if any(g.get("conviction") == c for g in matured)}
+    by_drawdown = {b: block([g for g in matured if g.get("dd_band") == b]) for b in DD_BANDS}
     cohort = None
     if buy_threshold is not None:
         cohort = block([g for g in matured if (g.get("final_score") or 0) >= buy_threshold])
@@ -259,7 +288,7 @@ def summarize_scorecard(graded, ret_key="ret_5d", alpha_key="alpha_5d",
     return {
         "ret_key": ret_key, "n_total": len(rows), "n_matured": len(matured),
         "overall": overall, "by_band": by_band, "by_conviction": by_conviction,
-        "cohort": cohort,
+        "by_drawdown": by_drawdown, "cohort": cohort,
     }
 
 
@@ -375,6 +404,13 @@ def render_scorecard_report(result, date_str) -> str:
             L.append("- By conviction:")
             for c, blk in fwd["by_conviction"].items():
                 L.append(f"    - {c}: {_summary_line(blk)}")
+        dd = fwd.get("by_drawdown", {})
+        if any((dd.get(b) or {}).get("n") for b in DD_BANDS):
+            L.append("- By drawdown-from-high at entry (did buying dips help?):")
+            for b in DD_BANDS:
+                blk = dd.get(b)
+                if blk and blk["n"]:
+                    L.append(f"    - {b}: {_summary_line(blk)}")
     fu = result.get("forward_unique")
     if fu:
         L += ["", f"### Independent picks — first recommendation only ({result.get('n_unique', 0)} names)",
@@ -477,6 +513,10 @@ def _html_block(title, fwd, ret_key) -> str:
     row("All picks", f["overall"])
     for b in BANDS:
         row(f"band {b}", f["by_band"][b])
+    for b in DD_BANDS:
+        blk = f.get("by_drawdown", {}).get(b)
+        if blk:
+            row(f"drawdown {b}", blk)
     return ('<table style="border-collapse:collapse;font-size:13px;margin:6px 0 14px;">'
             + head + "".join(rows) + "</table>")
 
