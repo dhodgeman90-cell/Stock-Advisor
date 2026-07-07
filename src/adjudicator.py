@@ -1,7 +1,29 @@
+import math
+
 from src import trust
 
 _ANALYST_BULL = {"strong_buy", "buy"}
 _ANALYST_BEAR = {"sell", "strong_sell", "underperform"}
+
+# Diminishing returns on stacked positive signals. A single strong signal counts in full up
+# to `_STACK_KNEE` (the largest single cap, congress at 18); only the SUM beyond that knee is
+# compressed, asymptoting at `_STACK_CAP`. This stops a mediocre base chart from being piled
+# to 100 by stacking congress+catalyst+SEC+options+... (the mechanism behind the inverted top
+# band) without penalising a name that has one genuine catalyst. Negatives stay full-strength:
+# a real risk should still be able to fully tank a name. Both are tunable priors (Phase D).
+_STACK_KNEE = 18.0
+_STACK_CAP = 30.0
+
+
+def _soft_cap_positive(points: float, knee: float = _STACK_KNEE, cap: float = _STACK_CAP) -> float:
+    """Positive points count in full up to `knee`; the excess is smoothly compressed so the
+    total asymptotes at `cap`. Monotonic, so a 3-signal name still outranks a 1-signal name."""
+    if points <= knee:
+        return max(0.0, points)
+    room = cap - knee
+    if room <= 0:
+        return min(points, cap)
+    return knee + room * math.tanh((points - knee) / room)
 
 
 def adjudicate(candidate: dict, news: dict, risk: dict, context: dict, caps: dict, *,
@@ -63,10 +85,12 @@ def adjudicate(candidate: dict, news: dict, risk: dict, context: dict, caps: dic
         final += note("regime_on", caps["regime"], f"+{caps['regime']:.0f} risk-on market")
 
     # ---- Congress (weighted heavily, per the owner) ----
-    if congress and congress.get("net_side") == "buy":
+    # Gate on freshness: a disclosure months old (or an empty feed with no FMP key) must not
+    # fire the single biggest lever. `fresh` defaults True so older callers/tests are unaffected.
+    if congress and congress.get("fresh", True) and congress.get("net_side") == "buy":
         final += note("congress_buy", caps["congress_buy"],
                       f"+{caps['congress_buy']:.0f} congress buying ({congress.get('n_members', 1)})")
-    elif congress and congress.get("net_side") == "sell":
+    elif congress and congress.get("fresh", True) and congress.get("net_side") == "sell":
         final += note("congress_sell", -caps["congress_sell"],
                       f"-{caps['congress_sell']:.0f} congress selling ({congress.get('n_members', 1)})")
 
@@ -120,7 +144,9 @@ def adjudicate(candidate: dict, news: dict, risk: dict, context: dict, caps: dic
                 final += note("options_bear", -cap, f"-{cap:.0f} unusual put flow")
 
     # ---- Short interest: squeeze setup (corroborated) vs crowded short (weak chart) ----
-    if short and short.get("pct_float") is not None \
+    # `fresh` (default True) drops a squeeze/crowded call when the exchange short-interest
+    # report is stale — yfinance .info can lag weeks, and the number moves markets only fresh.
+    if short and short.get("fresh", True) and short.get("pct_float") is not None \
             and short["pct_float"] >= thresholds.get("short_high_pct", 20):
         cap = caps.get("short_squeeze", 10)
         wsb_rising = bool(wsb and (wsb.get("mentions_change") or 0) > 0)
@@ -159,7 +185,13 @@ def adjudicate(candidate: dict, news: dict, risk: dict, context: dict, caps: dic
         if social_summary:
             adjustments.append(social_summary)
 
-    final = max(0.0, min(100.0, final))
+    # Recompute the final score from the structured detail so the positive stack is capped.
+    # (Every adjustment — including the social block above — is recorded in `detail`; nothing
+    # mid-function reads the running `final`, which keys off `base`.) Positives saturate;
+    # negatives apply in full.
+    pos = sum(d["points"] for d in detail if d["points"] > 0)
+    neg = sum(d["points"] for d in detail if d["points"] < 0)
+    final = max(0.0, min(100.0, base + _soft_cap_positive(pos) + neg))
 
     return {
         "ticker": ticker, "base_score": base, "final_score": final,

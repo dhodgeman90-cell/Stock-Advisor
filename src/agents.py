@@ -44,7 +44,7 @@ def news_agent(client, ticker: str, headlines: list) -> dict:
         "decide whether there is a real catalyst, its type, and overall sentiment. "
         "Respond ONLY with a JSON object with keys: catalyst (true/false), "
         "catalyst_type (string), sentiment (one of: pos, neutral, neg), "
-        "summary (one sentence)."
+        "summary (max 12 words, plain and direct, no hedging or qualifiers)."
     )
     user = f"Ticker: {ticker}\nHeadlines:\n" + "\n".join(f"- {h}" for h in headlines)
     try:
@@ -67,7 +67,7 @@ def risk_agent(client, ticker: str, recent_closes: list, headlines: list) -> dic
         "lawsuits/fraud, or a price spike on no news. Respond ONLY with a JSON object with keys: "
         "risk_level (one of: low, medium, high), red_flags (array of short strings), "
         "veto (true/false; true ONLY for severe danger such as an active fraud probe), "
-        "reason (one sentence)."
+        "reason (max 12 words, plain and direct, no hedging or qualifiers)."
     )
     closes = ", ".join(f"{c:.2f}" for c in recent_closes[-10:])
     hl = "\n".join(f"- {h}" for h in headlines) if headlines else "(none)"

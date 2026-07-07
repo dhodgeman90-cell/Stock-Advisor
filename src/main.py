@@ -13,6 +13,8 @@ from src.results import RunResult
 ROOT = Path(__file__).resolve().parent.parent
 
 MAX_ADDS = 3   # most names the daily rotation will recommend buying into
+OTHERS_DISPLAY = 15   # cap the "other scored" / "excluded" lists so a wide universe doesn't
+                      # dump hundreds of tickers into the briefing
 ENRICH_TIMEOUT_S = 45   # per-ticker ceiling for the parallel signal enrichment (secondary
                         # bound; data.fetch_history's network timeout is the real hang guard)
 
@@ -147,7 +149,22 @@ def _ai_is_actionable(holdings, projected_scores, buy_threshold) -> bool:
     return any(score >= buy_threshold for score in projected_scores)
 
 
-def run(profile: Profile | None = None, force: bool = False, *, fetch=None) -> RunResult:
+def _has_priority_signal(ticker, congress_agg, wsb_map, min_mentions) -> bool:
+    """True when a name carries a strong market-wide signal (fresh congressional buy or a
+    surging WSB mention count) that warrants enrichment even if its chart ranked below the
+    technical cut — so a catalyst on a middling chart isn't silently dropped before its
+    fundamentals are ever evaluated (the old momentum-only enrichment gate)."""
+    c = congress_agg.get(ticker)
+    if c and c.get("fresh", True) and c.get("net_side") == "buy":
+        return True
+    w = wsb_map.get(ticker)
+    if w and (w.get("mentions_change") or 0) > 0 and (w.get("mentions") or 0) >= min_mentions:
+        return True
+    return False
+
+
+def run(profile: Profile | None = None, force: bool = False, *, fetch=None,
+        fetch_batch=None) -> RunResult:
     # Make console output crash-proof: the briefing contains emojis that the legacy
     # Windows console (cp1252) cannot encode. UTF-8 + replace avoids a crash without
     # affecting the UTF-8 file that's saved.
@@ -164,6 +181,11 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None) -> R
     secrets.apply_to_environ()          # legacy modules (broker/llm/congress) read os.environ
     if fetch is None:
         fetch = data.fetch_history
+        if fetch_batch is None:
+            fetch_batch = data.fetch_history_batch      # real bulk download in the live path
+    if fetch_batch is None:
+        # a test injected a per-ticker fetch but no batch — wrap it so the funnel still runs
+        fetch_batch = lambda tickers, days: {t: fetch(t, days) for t in tickers}
 
     date_str = dt.date.today().isoformat()
 
@@ -186,10 +208,17 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None) -> R
     data_dir = profile.data_dir
     reports_dir = profile.reports_dir
 
+    # Stage 1 of the funnel: score the whole universe cheaply from one bulk price download.
+    # The universe is the broad scan list (config/universe.txt) if present, else the
+    # watchlist; the watchlist names are always pinned in so the owner's picks never drop out.
+    universe = config.load_universe(profile.config_dir) or wl["tickers"]
+    universe = list(dict.fromkeys([*universe, *wl["tickers"]]))
+    batch = fetch_batch(universe, lookback)
+
     scored = []
-    for ticker in wl["tickers"]:
-        df = fetch(ticker, lookback)
-        ok, reason = data.validate(df, ticker)
+    for ticker in universe:
+        df = batch.get(ticker)
+        ok, reason = data.validate(df, ticker) if df is not None else (False, f"{ticker}: no data")
         if ok:
             data.save_cache(df, ticker, data_dir)
         else:
@@ -267,8 +296,19 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None) -> R
 
     cands = sorted((s for s in scored if not s["excluded"]),
                    key=lambda s: s["score"], reverse=True)
-    shortlist = cands[:shortlist_size]
-    others = [{"ticker": s["ticker"], "score": s["score"]} for s in cands[shortlist_size:]]
+    # Stage 2: enrich the top `enrich_size` by technical score, PLUS any lower-ranked name
+    # carrying a fresh congress-buy / WSB surge — so a catalyst on a middling chart still gets
+    # its fundamentals evaluated instead of being cut by the momentum-only gate.
+    enrich_size = settings.get("enrich_size", max(shortlist_size, 25))
+    min_mentions = thr.get("social_min_mentions", 25)
+    shortlist = list(cands[:enrich_size])
+    enriched_names = {s["ticker"] for s in shortlist}
+    for s in cands[enrich_size:]:
+        if _has_priority_signal(s["ticker"], congress_agg, wsb_map, min_mentions):
+            shortlist.append(s)
+            enriched_names.add(s["ticker"])
+    others = [{"ticker": s["ticker"], "score": s["score"]}
+              for s in cands if s["ticker"] not in enriched_names]
     excluded = [{"ticker": s["ticker"], "reason": s["reason"]}
                 for s in scored if s["excluded"]]
 
@@ -362,6 +402,13 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None) -> R
         )
         (vetoed if adjd["vetoed"] else ranked).append(adjd)
     ranked.sort(key=lambda r: r["final_score"], reverse=True)
+    # Display cap: show only the top `shortlist_size` enriched candidates so the briefing stays
+    # concise on a wide universe; the enriched-but-not-shown drop into "other scored".
+    if len(ranked) > shortlist_size:
+        overflow = [{"ticker": r["ticker"], "score": r["final_score"]}
+                    for r in ranked[shortlist_size:]]
+        ranked = ranked[:shortlist_size]
+        others = sorted(overflow + others, key=lambda o: o["score"], reverse=True)
 
     # Log today's picks to the structured ledger so the scorecard can later grade how
     # they performed. Guarded like the email block — a ledger hiccup must never break the
@@ -405,16 +452,18 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None) -> R
     except Exception as e:
         print(f"[scorecard summary failed: {e}]")
 
+    others = others[:OTHERS_DISPLAY]
+    excluded = excluded[:OTHERS_DISPLAY]
     tone = objectives.tone_line(objective)
     text = briefing.render_briefing(
         ranked, vetoed, others, excluded, date_str, context["regime"], context["note"],
         holdings=holdings, rotation_plan=rotation_plan, discovery=discovery, tone_line=tone,
-        scorecard_summary=scorecard_summary,
+        scorecard_summary=scorecard_summary, buy_threshold=buy_threshold,
     )
     html = briefing.render_briefing_html(
         ranked, vetoed, others, excluded, date_str, context["regime"], context["note"],
         holdings=holdings, rotation_plan=rotation_plan, discovery=discovery, tone_line=tone,
-        scorecard_summary=scorecard_summary,
+        scorecard_summary=scorecard_summary, buy_threshold=buy_threshold,
     )
     report_path = reports_dir / f"{date_str}.md"
     report_path.write_text(text, encoding="utf-8")

@@ -26,6 +26,15 @@ def evaluate_exit(df, position, rules) -> dict:
     pct_from_entry = (price - entry) / entry * 100
 
     stop_pct = float(_resolve(position, defaults, "stop_loss_pct"))
+    # Optional volatility-scaled stop: a flat 5% is too tight on a high-ATR name (whipsaw) and
+    # arbitrary on a calm one. When atr_stop_mult > 0, scale by ATR but keep it bounded to
+    # [0.5x, 2x] the flat stop so it never runs away. Off by default (mult 0) → flat stop.
+    atr_mult = float(defaults.get("atr_stop_mult", 0) or 0)
+    if atr_mult > 0:
+        atr_val = float(indicators.atr(df, int(defaults.get("atr_period", 14))).iloc[-1])
+        if not pd.isna(atr_val) and price > 0:
+            atr_stop_pct = atr_mult * atr_val / price * 100
+            stop_pct = min(max(atr_stop_pct, stop_pct * 0.5), stop_pct * 2.0)
     mode = str(defaults.get("take_profit_mode", "hard")).lower()
     # MA periods are global only — no per-position override
     fast = int(defaults["trend_break_fast"])
