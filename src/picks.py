@@ -90,6 +90,9 @@ def log_picks(ranked, df_by_ticker, data_dir, date_str, *, source="briefing") ->
             # Which adjudicator caps fired on this pick, for per-signal scorecard
             # attribution. Empty for report-backfilled picks (the .md has no detail).
             "signals": [d.get("key") for d in (r.get("adjustment_detail") or []) if d.get("key")],
+            # How many of the 7 enrichment signals were real (non-neutral); lets the scorecard
+            # later separate thin-data picks. Absent on report-backfilled picks.
+            "data_signals_live": r.get("data_signals_live"),
             "source": source,
         })
     return append_records(records, data_dir)

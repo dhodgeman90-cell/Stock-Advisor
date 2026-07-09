@@ -14,12 +14,16 @@ DEFAULT = "balanced"
 ORDER = ["conservative", "balanced", "active", "aggressive"]   # slider order
 
 OBJECTIVES = {
+    # Stop/trail widths reconciled with the 2026-07-09 walk-forward sweep: a trailing stop
+    # below ~10% churns out of every winner on a routine pullback and destroys returns without
+    # reducing drawdown. The slider stays monotonic (conservative widest -> aggressive tightest),
+    # but every notch now sits in the validated, non-pathological range.
     "conservative": {
         "label": "Conservative",
         "weights": {"breakout": 15, "volume": 20, "momentum": 10, "trend": 40, "pullback": 15},
-        "stop_loss_pct": 8, "trailing_stop_pct": 12,
+        "stop_loss_pct": 10, "trailing_stop_pct": 25,
         "max_hold_days": 250, "buy_threshold": 75,
-        "tone_line": "Conservative lens · trend-led, fewer high-conviction moves, wider stops.",
+        "tone_line": "Conservative lens · trend-led, fewer high-conviction moves, widest stops.",
     },
     "balanced": {
         "label": "Balanced",
@@ -31,16 +35,16 @@ OBJECTIVES = {
     "active": {
         "label": "Active",
         "weights": {"breakout": 32, "volume": 30, "momentum": 23, "trend": 12, "pullback": 3},
-        "stop_loss_pct": 5, "trailing_stop_pct": 5,
+        "stop_loss_pct": 7, "trailing_stop_pct": 14,
         "max_hold_days": 90, "buy_threshold": 60,
         "tone_line": "Active lens · momentum-tilted with shorter holds.",
     },
     "aggressive": {
         "label": "Aggressive Swing",
         "weights": {"breakout": 35, "volume": 30, "momentum": 25, "trend": 10, "pullback": 0},
-        "stop_loss_pct": 4, "trailing_stop_pct": 4,
+        "stop_loss_pct": 6, "trailing_stop_pct": 10,
         "max_hold_days": 30, "buy_threshold": 55,
-        "tone_line": "Aggressive Swing lens · momentum-led, tight stops, short holds.",
+        "tone_line": "Aggressive Swing lens · momentum-led, tighter stops, short holds.",
     },
 }
 

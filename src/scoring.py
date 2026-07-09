@@ -50,10 +50,14 @@ def compute_components(df: pd.DataFrame) -> dict:
 
 def score_ticker(df: pd.DataFrame, ticker: str, weights: dict, settings: dict) -> dict:
     min_price = settings.get("min_price", 5.0)
-    min_avg_volume = settings.get("min_avg_volume", 500_000)
+    # Liquidity gate is DOLLAR volume, not share count. A share-count floor wrongly excludes
+    # high-priced names that are highly liquid in dollars — e.g. NVR trades ~28k shares/day but
+    # at ~$8k/share that's ~$224M/day. Dollar volume is what actually bounds fill quality, and
+    # it also lets a broader (small/mid-cap) universe be screened on one honest yardstick.
+    min_dollar_volume = settings.get("min_dollar_volume", 10_000_000)
 
     price = float(df["Close"].iloc[-1])
-    avg_vol = float(df["Volume"].rolling(20).mean().iloc[-1])
+    avg_dollar_vol = float((df["Close"] * df["Volume"]).rolling(20).mean().iloc[-1])
 
     if price < min_price:
         return {
@@ -61,11 +65,11 @@ def score_ticker(df: pd.DataFrame, ticker: str, weights: dict, settings: dict) -
             "excluded": True,
             "reason": f"price ${price:.2f} below floor ${min_price:.2f}",
         }
-    if pd.isna(avg_vol) or avg_vol < min_avg_volume:
+    if pd.isna(avg_dollar_vol) or avg_dollar_vol < min_dollar_volume:
         return {
             "ticker": ticker,
             "excluded": True,
-            "reason": f"avg volume {avg_vol:,.0f} below floor {min_avg_volume:,}",
+            "reason": f"avg $volume ${avg_dollar_vol:,.0f}/day below floor ${min_dollar_volume:,}",
         }
 
     components = compute_components(df)

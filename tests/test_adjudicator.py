@@ -111,10 +111,12 @@ def test_edgar_severe_penalizes_like_high_risk():
     assert out["final_score"] == 40       # 60 - 20 (risk_high cap)
 
 
-def test_edgar_activist_stacks_on_catalyst():
+def test_edgar_activist_compresses_when_stacked_on_catalyst():
     out = _adj(50, edgar={"catalyst": True, "catalyst_types": ["entered a material agreement"],
                           "severe": False, "negative": False, "activist": True})
-    assert out["final_score"] == 77       # 50 + 15 + 12
+    # Raw would be 50 + 15 + 12 = 77, but stacked positives past the 18-pt knee get
+    # diminishing returns, so two signals together add less than their arithmetic sum.
+    assert 74 < out["final_score"] < 77   # compressed, not the naive 77
 
 
 def test_options_bullish_flow_only_when_unusual_and_liquid():

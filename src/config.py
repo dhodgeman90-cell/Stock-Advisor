@@ -27,6 +27,25 @@ def load_watchlist(config_dir=CONFIG_DIR, name=None) -> dict:
     }
 
 
+def load_universe(config_dir=CONFIG_DIR):
+    """Broad scan universe from config/universe.txt (one ticker per line, '#' = comment).
+
+    Returns an upper-cased, de-duplicated list, or None when the file is absent (the caller
+    then falls back to the watchlist tickers). This is the wide funnel the two-stage scorer
+    ranks down to an enrichment shortlist; watchlist.yaml stays the small pinned/settings file.
+    """
+    path = Path(config_dir) / "universe.txt"
+    if not path.exists():
+        return None
+    out, seen = [], set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        t = line.split("#", 1)[0].strip().upper()
+        if t and t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out or None
+
+
 def load_weights(config_dir=CONFIG_DIR) -> dict:
     data = _load("weights.yaml", config_dir)
     weights = data.get("weights")
@@ -35,12 +54,41 @@ def load_weights(config_dir=CONFIG_DIR) -> dict:
     return {k: float(v) for k, v in weights.items()}
 
 
-def load_adjudicator(config_dir=CONFIG_DIR) -> dict:
+def load_adjudicator_base(config_dir=CONFIG_DIR) -> dict:
+    """The hand-set caps only (the prior), ignoring any calibration overlay. src.calibrate
+    reads this so repeated runs shrink from the prior, not from an already-shrunk value."""
     data = _load("adjudicator.yaml", config_dir)
     caps = data.get("caps")
     if not caps:
         raise ValueError("adjudicator.yaml must contain a 'caps' mapping")
     return {k: float(v) for k, v in caps.items()}
+
+
+def load_adjudicator(config_dir=CONFIG_DIR) -> dict:
+    """Hand-set caps with the generated calibration overlay applied on top when present.
+
+    The overlay (adjudicator.calibrated.yaml, written by src.calibrate) only *shrinks* caps the
+    ledger shows are hurting; the hand-set values stay the prior/fallback. Absent overlay → the
+    plain hand-set caps.
+    """
+    caps = load_adjudicator_base(config_dir)
+    path = Path(config_dir) / "adjudicator.calibrated.yaml"
+    if path.exists():
+        with open(path, "r", encoding="utf-8") as f:
+            overlay = yaml.safe_load(f) or {}
+        for k, v in (overlay.get("caps") or {}).items():
+            if k in caps:                      # only override caps that already exist
+                caps[k] = float(v)
+    return caps
+
+
+def save_calibrated_adjudicator(config_dir, caps, meta=None) -> None:
+    """Persist the calibration overlay atomically. `meta` (e.g. generated date, sample size)
+    is recorded alongside for provenance but ignored by the loader."""
+    payload = {"caps": {k: float(v) for k, v in caps.items()}}
+    if meta:
+        payload["_meta"] = dict(meta)
+    _atomic_write_yaml(Path(config_dir) / "adjudicator.calibrated.yaml", payload)
 
 
 SIGNAL_DEFAULTS = {

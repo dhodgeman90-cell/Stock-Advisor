@@ -30,6 +30,14 @@ def test_should_skip_today_runs_on_half_days():
     assert main._should_skip_today(dt.date(2026, 11, 27)) is False
 
 
+def test_count_live_signals_ignores_neutral_bundle():
+    # A fully-degraded enrichment bundle counts 0 live signals; one real analyst dict counts 1.
+    # This is what lets the briefing flag a momentum-only pick as "thin data".
+    assert main._count_live_signals(main._neutral_bundle()) == 0
+    sigs = {**main._neutral_bundle(), "analyst": {"rating": "buy", "upside_pct": 10}}
+    assert main._count_live_signals(sigs) == 1
+
+
 def test_should_skip_today_force_overrides_everything():
     assert main._should_skip_today(dt.date(2026, 6, 13), force=True) is False    # weekend
     assert main._should_skip_today(dt.date(2026, 12, 25), force=True) is False   # holiday
@@ -66,15 +74,17 @@ _THR = {"social_min_mentions": 25, "earnings_window_days": 5}
 
 
 def test_projected_score_lifts_low_base_over_threshold_via_deterministic_boosts():
-    # base 59 + congress buy (+18) + analysts bullish (+8) = 85 >= 65, using NO AI.
-    # This is the score that should decide AI-worthiness (the old gate used base 59).
+    # base 59 + congress buy (+18) + analysts bullish (+8): raw 85, but the positive-stack cap
+    # compresses the pile past the knee to ~84 — still well over the 65 gate, which is the point
+    # (AI-worthiness keys off CROSSING the threshold, not the exact score). Used NO AI.
     score = main._projected_score(
         59, _CTX, _CAPS,
         congress={"net_side": "buy", "n_members": 3},
         analyst={"rating": "strong_buy", "upside_pct": 16},
         thresholds=_THR,
     )
-    assert score == 85
+    assert 83 < score < 85
+    assert score >= 65        # the AI-worthiness gate it must clear
 
 
 def test_projected_score_stays_low_without_boosts():

@@ -12,7 +12,8 @@ class WatchSettings(BaseModel):
     shortlist_size: int = 8
     lookback_days: int = 200
     min_price: float = 5.0
-    min_avg_volume: int = 500000
+    min_avg_volume: int = 500000        # legacy share-count floor (no longer used by scoring)
+    min_dollar_volume: int = 10000000   # liquidity gate: $10M/day traded value
 
 
 class SettingsBody(BaseModel):

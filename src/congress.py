@@ -115,8 +115,15 @@ def _midpoint(trade):
     return (trade["amount_low"] + trade["amount_high"]) / 2.0
 
 
-def aggregate_by_ticker(trades):
-    """Roll trades up per ticker: net direction by dollar weight, counts, recency."""
+def aggregate_by_ticker(trades, today=None, fresh_days=75):
+    """Roll trades up per ticker: net direction by dollar weight, counts, recency.
+
+    Sets `fresh` per ticker: True only when the most recent disclosure is within `fresh_days`.
+    Congress filings are legally lagged up to 45 days, so a disclosure older than ~75 days is
+    stale news; the adjudicator drops the (heavily weighted) congress cap when `fresh` is False.
+    """
+    today = today or dt.date.today()
+    cutoff = today - dt.timedelta(days=fresh_days)
     agg = {}
     for t in trades:
         a = agg.setdefault(t["ticker"], {
@@ -141,6 +148,8 @@ def aggregate_by_ticker(trades):
     for ticker, a in agg.items():
         a["n_members"] = len(a.pop("members"))
         a["net_side"] = "buy" if a["buy_dollars"] >= a["sell_dollars"] else "sell"
+        d = _parse_date(a["most_recent_disclosure"])
+        a["fresh"] = bool(d is not None and d >= cutoff)
     return agg
 
 

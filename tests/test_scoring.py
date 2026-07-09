@@ -34,3 +34,12 @@ def test_illiquid_stock_is_excluded_by_volume_floor():
     result = scoring.score_ticker(df, "THIN", WEIGHTS, SETTINGS)
     assert result["excluded"] is True
     assert "volume" in result["reason"].lower()
+
+
+def test_high_priced_thin_share_count_is_liquid_in_dollars():
+    # NVR-style: only ~30k shares/day, but at ~$8k/share that's ~$240M/day — very liquid.
+    # The old share-count floor (500k) wrongly excluded it; the dollar-volume gate keeps it.
+    df = make_df([8000.0] * 60, volume=30_000)
+    result = scoring.score_ticker(df, "NVR", WEIGHTS,
+                                  {"min_price": 5.0, "min_dollar_volume": 10_000_000})
+    assert result["excluded"] is False

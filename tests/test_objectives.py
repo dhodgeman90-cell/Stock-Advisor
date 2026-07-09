@@ -22,8 +22,10 @@ def test_aggressive_overrides_weights_and_exits():
     base_x = {"defaults": {"stop_loss_pct": 5, "trailing_stop_pct": 6},
               "backtest": {"buy_threshold": 65, "max_hold_days": 250}}
     x = objectives.apply_exit_rules(base_x, "aggressive")
-    assert x["defaults"]["stop_loss_pct"] == 4
-    assert x["defaults"]["trailing_stop_pct"] == 4
+    # Stops reconciled with the walk-forward sweep (a <10% trail churns out of winners); the
+    # aggressive notch is still the tightest but no longer in the pathological range.
+    assert x["defaults"]["stop_loss_pct"] == 6
+    assert x["defaults"]["trailing_stop_pct"] == 10
     assert x["backtest"]["buy_threshold"] == 55
     assert x["backtest"]["max_hold_days"] == 30
 

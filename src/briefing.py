@@ -2,6 +2,15 @@ import html
 import math
 from email.message import EmailMessage
 
+from src import verdict
+
+
+def _clip(text, n=160) -> str:
+    """Defensive truncation so a run-on LLM sentence can't blow up a card. The prompts ask
+    for <=12 words, but the model overruns; this is the belt to that suspenders."""
+    text = str(text or "").strip()
+    return text if len(text) <= n else text[:n - 1].rstrip() + "…"
+
 
 # Pill (background, foreground) colors for a holding signal level.
 _PILL_COLORS = {
@@ -208,15 +217,27 @@ def _reality_check_html(summary, e) -> str:
             f'{summary["n_matured"]} matured picks.</div>')
 
 
+def _thin_data_note(r) -> str:
+    """' · thin data (k/7)' when fewer than 3 of the 7 enrichment signals resolved for this
+    pick, so a momentum-only score isn't mistaken for a corroborated one. Empty when the count
+    is unknown (report-backfilled picks predate the field) or healthy. Shared by both renderers
+    so the markdown and HTML briefings stay in sync."""
+    live = r.get("data_signals_live")
+    return f" · thin data ({live}/7)" if live is not None and live < 3 else ""
+
+
 def render_briefing(ranked, vetoed, others, excluded, date_str, regime, regime_note,
                     holdings=None, rotation_plan=None, discovery=None, tone_line=None,
-                    scorecard_summary=None) -> str:
+                    scorecard_summary=None, buy_threshold=65) -> str:
     """Render the enriched daily briefing (Phase 2 + Phase 3 holdings + signal upgrade).
 
     `ranked` is pre-sorted by final_score. The rotation plan and holdings lead the
     briefing; the discovery feed (untracked signals) trails it. `tone_line` is an
-    optional one-line strategy framing (set by the active objective preset).
+    optional one-line strategy framing (set by the active objective preset). Each candidate
+    leads with a single Buy/Watch/Avoid verdict; the raw signal detail is demoted below it.
     """
+    underperforming = bool(scorecard_summary and scorecard_summary.get("enough")
+                           and scorecard_summary.get("underperforming"))
     L = [
         f"# Stock Advisor — {date_str}",
         "",
@@ -238,11 +259,13 @@ def render_briefing(ranked, vetoed, others, excluded, date_str, regime, regime_n
     if not ranked:
         L.append("_No candidates today._")
     for r in ranked:
-        adj = "  ".join(r["adjustments"]) or "no adjustments"
-        L.append(f"- **{r['ticker']}**: {r['final_score']:.0f}/100 (base {r['base_score']:.0f})")
-        L.append(f"    - 📰 {r['news']['summary']}")
-        L.append(f"    - 🚩 risk {r['risk']['risk_level']}: {r['risk']['reason']}")
-        L.append(f"    - adj: {adj}")
+        v = verdict.classify(r, buy_threshold, underperforming=underperforming)
+        L.append(f"- **{r['ticker']}** — {v['call']}: {v['reason']} "
+                 f"_(score {r['final_score']:.0f}/100 · {v['confidence']} confidence"
+                 f"{_thin_data_note(r)})_")
+        # Supporting detail, demoted below the verdict (was a raw 'adj:' math dump).
+        L.append(f"    - 📰 {_clip(r['news']['summary'])}")
+        L.append(f"    - 🚩 risk {r['risk']['risk_level']}: {_clip(r['risk']['reason'])}")
         for line in _candidate_insight_lines(r):
             L.append(f"    - {line}")
 
@@ -325,25 +348,40 @@ def _holdings_html(holdings, e, run_date=None) -> str:
             + "".join(rows) + "</table>")
 
 
-def _candidate_card_html(r, e, green) -> str:
-    """Left-bordered card for one ranked candidate."""
-    adj = "  ".join(r["adjustments"]) or "no adjustments"
+# (background, foreground) for the Buy/Watch/Avoid verdict pill.
+_VERDICT_COLORS = {
+    "Buy":   ("#dcfce7", "#166534"),   # green
+    "Watch": ("#fef9c3", "#854d0e"),   # amber
+    "Avoid": ("#fee2e2", "#991b1b"),   # red
+}
+
+
+def _candidate_card_html(r, e, green, buy_threshold=65, underperforming=False) -> str:
+    """Left-bordered card: one clear verdict up top, the raw signal detail collapsed below."""
+    v = verdict.classify(r, buy_threshold, underperforming=underperforming)
+    bg, fg = _VERDICT_COLORS.get(v["call"], _VERDICT_COLORS["Watch"])
     insight_html = "".join(
         f'<div style="font-size:12px;color:#4b5563;margin-top:2px;">{e(line)}</div>'
         for line in _candidate_insight_lines(r)
+    )
+    details = (
+        '<details style="margin-top:6px;">'
+        '<summary style="font-size:11px;color:#9ca3af;cursor:pointer;">details</summary>'
+        f'<div style="font-size:12.5px;color:#4b5563;margin-top:4px;">📰 {e(_clip(r["news"]["summary"]))}</div>'
+        f'<div style="font-size:12.5px;color:#4b5563;">🚩 risk {e(r["risk"]["risk_level"])}: '
+        f'{e(_clip(r["risk"]["reason"]))}</div>'
+        f'{insight_html}</details>'
     )
     return (
         f'<div style="border-left:3px solid {green};background:#f7faf8;'
         f'border-radius:0 8px 8px 0;padding:11px 13px;margin-bottom:9px;">'
         f'<div style="font-size:13.5px;"><b>{e(r["ticker"])}</b> &nbsp;'
-        f'<span style="color:{green};font-weight:700;">{r["final_score"]:.0f}</span>'
-        f'<span style="color:#9ca3af;">/100</span> '
-        f'<span style="color:#9ca3af;font-size:11.5px;">(base {r["base_score"]:.0f})</span></div>'
-        f'<div style="font-size:12.5px;color:#4b5563;margin-top:4px;">📰 {e(r["news"]["summary"])}</div>'
-        f'<div style="font-size:12.5px;color:#4b5563;">🚩 risk {e(r["risk"]["risk_level"])}: '
-        f'{e(r["risk"]["reason"])}</div>'
-        f'{insight_html}'
-        f'<div style="font-size:11.5px;color:#9ca3af;margin-top:3px;">adj: {e(adj)}</div></div>'
+        f'<span style="background:{bg};color:{fg};padding:1px 9px;border-radius:999px;'
+        f'font-size:11.5px;font-weight:700;">{e(v["call"])}</span> '
+        f'<span style="color:#4b5563;font-size:12.5px;">{e(v["reason"])}</span></div>'
+        f'<div style="font-size:11px;color:#9ca3af;margin-top:3px;">'
+        f'score {r["final_score"]:.0f}/100 · {e(v["confidence"])} confidence{_thin_data_note(r)}</div>'
+        f'{details}</div>'
     )
 
 
@@ -398,10 +436,12 @@ def _discovery_html(congress_movers, wsb_movers, e) -> str:
 
 def render_briefing_html(ranked, vetoed, others, excluded, date_str, regime,
                          regime_note, holdings=None, rotation_plan=None, discovery=None,
-                         tone_line=None, scorecard_summary=None) -> str:
+                         tone_line=None, scorecard_summary=None, buy_threshold=65) -> str:
     """Styled HTML version of the daily briefing (plain-text fallback stays render_briefing)."""
     e = html.escape
     green = "#0f3d2e"
+    underperforming = bool(scorecard_summary and scorecard_summary.get("enough")
+                           and scorecard_summary.get("underperforming"))
     tone_html = (f'<div style="font-size:11.5px;color:#cdeede;margin-top:4px;'
                  f'font-style:italic;">{e(tone_line)}</div>') if tone_line else ""
     P = [
@@ -423,7 +463,8 @@ def render_briefing_html(ranked, vetoed, others, excluded, date_str, regime,
         'Top candidates</div>',
     ]
     if ranked:
-        P.extend(_candidate_card_html(r, e, green) for r in ranked)
+        P.extend(_candidate_card_html(r, e, green, buy_threshold, underperforming)
+                 for r in ranked)
     else:
         P.append('<div style="font-size:12.5px;color:#6b7280;">No candidates today.</div>')
 

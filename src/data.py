@@ -93,3 +93,49 @@ def fetch_history(ticker: str, days: int):
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     return _drop_incomplete(df)
+
+
+def _extract_ticker_frame(raw, ticker: str, chunk_len: int):
+    """Pull one ticker's OHLCV frame out of a bulk yf.download(group_by='ticker') result."""
+    if isinstance(raw.columns, pd.MultiIndex):
+        if ticker in set(raw.columns.get_level_values(0)):
+            return _drop_incomplete(raw[ticker].copy())
+        # some yfinance versions put the OHLC field at level 0 and the ticker at level -1
+        if ticker in set(raw.columns.get_level_values(-1)):
+            return _drop_incomplete(raw.xs(ticker, axis=1, level=-1).copy())
+        return None
+    # flat columns == a single-ticker chunk
+    return _drop_incomplete(raw.copy()) if chunk_len == 1 else None
+
+
+def fetch_history_batch(tickers, days: int, chunk_size: int = 60) -> dict:
+    """Bulk daily OHLCV for a wide universe -> {ticker: df or None}. Network call.
+
+    Chunked so a single bad symbol or a transient rate-limit only affects its chunk, which
+    then degrades to one-at-a-time fetches. This is the two-stage funnel's stage-1 input:
+    score every name cheaply from these frames, then enrich only the shortlist. Far fewer
+    round-trips than looping fetch_history over hundreds of tickers.
+    """
+    import yfinance as yf
+
+    start, end = _window_bounds(days)
+    tickers = list(dict.fromkeys(str(t).upper() for t in tickers))
+    out = {}
+    for i in range(0, len(tickers), chunk_size):
+        chunk = tickers[i:i + chunk_size]
+        try:
+            raw = yf.download(chunk, start=start, end=end, interval="1d", auto_adjust=True,
+                              progress=False, threads=True, group_by="ticker",
+                              timeout=DATA_TIMEOUT)
+        except Exception:
+            raw = None
+        if raw is None or len(raw) == 0:
+            for t in chunk:                       # whole chunk failed -> try each once
+                try:
+                    out[t] = fetch_history(t, days)
+                except Exception:
+                    out[t] = None
+            continue
+        for t in chunk:
+            out[t] = _extract_ticker_frame(raw, t, len(chunk))
+    return out

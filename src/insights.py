@@ -123,12 +123,17 @@ def get_earnings(ticker, fetch=_default_earnings_fetch) -> dict:
 
 
 # --- short interest / squeeze setup ---------------------------------------
-def _parse_short(info):
+def _parse_short(info, today=None, fresh_days=45):
     """Short-interest read from yfinance .info (already a free field — no new source).
 
     `shortPercentOfFloat` is a 0-1 fraction (0.1439 = 14.39%); we surface it as a
     percent. `shortRatio` is days-to-cover. `rising` compares this month's short shares
     to the prior month so the adjudicator can tell a building short from a covering one.
+
+    `fresh` uses yfinance's `dateShortInterest` (the exchange report date): exchange short
+    interest is reported ~twice a month with a lag, so a report older than `fresh_days` is
+    stale and the adjudicator drops the squeeze/crowded-short call. Defaults True when the
+    date is missing (can't prove staleness → keep the old behavior).
     """
     pct = info.get("shortPercentOfFloat")
     pct_float = float(pct) * 100.0 if pct is not None else None
@@ -138,11 +143,20 @@ def _parse_short(info):
     if shares is not None and prior is not None:
         rising = float(shares) > float(prior)
     dtc = info.get("shortRatio")
+    fresh = True
+    ts = info.get("dateShortInterest")
+    if ts:
+        try:
+            report_date = dt.date.fromtimestamp(int(ts))
+            fresh = ((today or dt.date.today()) - report_date).days <= fresh_days
+        except (ValueError, OverflowError, OSError):
+            fresh = True
     return {
         "pct_float": round(pct_float, 2) if pct_float is not None else None,
         "days_to_cover": float(dtc) if dtc is not None else None,
         "shares_short": int(shares) if shares is not None else None,
         "rising": rising,
+        "fresh": fresh,
     }
 
 
