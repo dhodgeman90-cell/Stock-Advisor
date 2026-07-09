@@ -17,4 +17,5 @@ settings:
   shortlist_size: 8
   lookback_days: 200
   min_price: 5.0
-  min_avg_volume: 500000
+  min_avg_volume: 500000        # legacy share-count floor (no longer used by scoring)
+  min_dollar_volume: 10000000   # liquidity gate: $10M/day traded value (price x shares)

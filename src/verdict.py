@@ -41,6 +41,7 @@ _PHRASE = {
 _CONTRADICTORS = {
     "risk_high", "analyst_bear", "edgar_adverse", "edgar_severe",
     "news_negative", "congress_sell", "insider_sell",
+    "options_bear", "estimates_down",
 }
 
 # Watch spans this many points below the buy line; further below is an Avoid.

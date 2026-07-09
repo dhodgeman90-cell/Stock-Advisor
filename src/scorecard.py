@@ -42,9 +42,15 @@ from src import backtest, config, data, exits, picks
 from src.profile import Profile
 from src.results import ScorecardResult
 
-# Matches a Top-candidates line in a saved briefing, e.g. "- **AAPL**: 96/100 (base 81)".
-# The "## Other scored" section uses a different format and is deliberately not matched.
+# Matches a Top-candidates line in a saved briefing. Two formats have shipped:
+#   OLD (through 2026-07-06): "- **AAPL**: 96/100 (base 81)"
+#   NEW (2026-07-07+):        "- **AES** — Buy: driven by a news catalyst _(score 100/100 · low confidence)_"
+# The new format carries no base score (base_score=None); grading keys off final_score, so
+# that's fine. Anchoring NEW on the literal "_(score N/100" avoids the stray "score" in a
+# reason like "strong score but...". The "## Other scored" section is a different format and
+# is deliberately not matched by either. Try OLD first (it also captures base).
 PICK_RE = re.compile(r"^- \*\*([A-Z][A-Z0-9.\-]*)\*\*:\s*(\d+)/100 \(base (\d+)\)")
+NEW_PICK_RE = re.compile(r"^- \*\*([A-Z][A-Z0-9.\-]*)\*\* .*?_\(score (\d+)/100")
 DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})$")   # report stem; skips backtest-*/scorecard-*
 
 # Forward horizons in trading bars.
@@ -70,16 +76,21 @@ def parse_report(text: str, date_str: str) -> list[dict]:
             continue
         m = PICK_RE.match(line)
         if m:
-            ticker, final, base = m.group(1), int(m.group(2)), int(m.group(3))
-            records.append({
-                "date": date_str,
-                "ticker": ticker,
-                "final_score": float(final),
-                "base_score": float(base),
-                "conviction": None,        # not recoverable from the report text
-                "entry_close": None,       # no price in the report; grader fetches it
-                "source": "report",
-            })
+            ticker, final, base = m.group(1), int(m.group(2)), float(m.group(3))
+        else:
+            m = NEW_PICK_RE.match(line)
+            if not m:
+                continue
+            ticker, final, base = m.group(1), int(m.group(2)), None   # new format has no base
+        records.append({
+            "date": date_str,
+            "ticker": ticker,
+            "final_score": float(final),
+            "base_score": base,
+            "conviction": None,        # not recoverable from the report text
+            "entry_close": None,       # no price in the report; grader fetches it
+            "source": "report",
+        })
     return records
 
 

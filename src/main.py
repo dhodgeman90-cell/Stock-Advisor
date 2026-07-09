@@ -92,6 +92,21 @@ def _neutral_bundle() -> dict:
     }
 
 
+def _count_live_signals(sigs) -> int:
+    """How many of the 7 per-ticker enrichment signals returned a REAL (non-neutral) value.
+
+    Every get_* degrades to its NEUTRAL_* sentinel on failure/missing data, so a momentum-only
+    score can otherwise masquerade as fully enriched. A low count means "thin data" — the
+    briefing flags it so a saturated score isn't mistaken for a well-corroborated one."""
+    neutral = {
+        "analyst": insights.NEUTRAL_ANALYST, "insider": insights.NEUTRAL_INSIDER,
+        "earnings": insights.NEUTRAL_EARNINGS, "short": insights.NEUTRAL_SHORT,
+        "revision": insights.NEUTRAL_REVISION, "edgar": edgar.NEUTRAL_SEC,
+        "options": options.NEUTRAL_OPTIONS,
+    }
+    return sum(1 for k, n in neutral.items() if sigs.get(k) not in (None, n))
+
+
 def _enrich_candidate(ticker, cik_map, sec_window) -> dict:
     """All per-ticker deterministic signals for one candidate (each degrades on its own).
 
@@ -400,8 +415,12 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None,
             edgar=sigs["edgar"], options=sigs["options"], short=sigs["short"],
             revision=sigs["revision"],
         )
+        adjd["data_signals_live"] = _count_live_signals(sigs)
         (vetoed if adjd["vetoed"] else ranked).append(adjd)
-    ranked.sort(key=lambda r: r["final_score"], reverse=True)
+    # Sort by the UNCAPPED rank_score, not the clamped final_score: otherwise a dozen names
+    # that all pin at a displayed 100 tie and fall back to arbitrary order, and negatives
+    # (put flow, falling estimates) that push past the clamp become invisible to the ranking.
+    ranked.sort(key=lambda r: r.get("rank_score", r["final_score"]), reverse=True)
     # Display cap: show only the top `shortlist_size` enriched candidates so the briefing stays
     # concise on a wide universe; the enriched-but-not-shown drop into "other scored".
     if len(ranked) > shortlist_size:

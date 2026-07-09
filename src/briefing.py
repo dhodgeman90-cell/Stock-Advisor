@@ -217,6 +217,15 @@ def _reality_check_html(summary, e) -> str:
             f'{summary["n_matured"]} matured picks.</div>')
 
 
+def _thin_data_note(r) -> str:
+    """' · thin data (k/7)' when fewer than 3 of the 7 enrichment signals resolved for this
+    pick, so a momentum-only score isn't mistaken for a corroborated one. Empty when the count
+    is unknown (report-backfilled picks predate the field) or healthy. Shared by both renderers
+    so the markdown and HTML briefings stay in sync."""
+    live = r.get("data_signals_live")
+    return f" · thin data ({live}/7)" if live is not None and live < 3 else ""
+
+
 def render_briefing(ranked, vetoed, others, excluded, date_str, regime, regime_note,
                     holdings=None, rotation_plan=None, discovery=None, tone_line=None,
                     scorecard_summary=None, buy_threshold=65) -> str:
@@ -252,7 +261,8 @@ def render_briefing(ranked, vetoed, others, excluded, date_str, regime, regime_n
     for r in ranked:
         v = verdict.classify(r, buy_threshold, underperforming=underperforming)
         L.append(f"- **{r['ticker']}** — {v['call']}: {v['reason']} "
-                 f"_(score {r['final_score']:.0f}/100 · {v['confidence']} confidence)_")
+                 f"_(score {r['final_score']:.0f}/100 · {v['confidence']} confidence"
+                 f"{_thin_data_note(r)})_")
         # Supporting detail, demoted below the verdict (was a raw 'adj:' math dump).
         L.append(f"    - 📰 {_clip(r['news']['summary'])}")
         L.append(f"    - 🚩 risk {r['risk']['risk_level']}: {_clip(r['risk']['reason'])}")
@@ -370,7 +380,7 @@ def _candidate_card_html(r, e, green, buy_threshold=65, underperforming=False) -
         f'font-size:11.5px;font-weight:700;">{e(v["call"])}</span> '
         f'<span style="color:#4b5563;font-size:12.5px;">{e(v["reason"])}</span></div>'
         f'<div style="font-size:11px;color:#9ca3af;margin-top:3px;">'
-        f'score {r["final_score"]:.0f}/100 · {e(v["confidence"])} confidence</div>'
+        f'score {r["final_score"]:.0f}/100 · {e(v["confidence"])} confidence{_thin_data_note(r)}</div>'
         f'{details}</div>'
     )
 

@@ -151,3 +151,20 @@ def test_trend_break_slow_level_configurable_to_watch():
     result = exits.evaluate_exit(df, position, rules)
     sig = next(s for s in result["signals"] if s["type"] == "trend_break_slow")
     assert sig["level"] == "watch"                            # demoted -> won't close a backtest trade
+
+
+def test_time_exit_fires_after_max_hold():
+    # Flat series so NO price-based signal fires; the position has been held long past max.
+    df = make_df([100.0] * 60)                                # last bar 2024-02-29
+    rules = {"defaults": {**RULES["defaults"], "max_hold_days": 30}, "backtest": {}}
+    pos = {"ticker": "T", "entry_price": 100.0, "entry_date": "2024-01-01"}   # ~59 days held
+    result = exits.evaluate_exit(df, pos, rules)
+    assert "time_exit" in _types(result)
+
+
+def test_no_time_exit_without_entry_date():
+    # The backtest's synthetic positions carry no entry_date, so the live time-stop must stay
+    # dormant there — the backtest owns its own bar-based max-hold force-close.
+    rules = {"defaults": {**RULES["defaults"], "max_hold_days": 30}, "backtest": {}}
+    result = exits.evaluate_exit(make_df([100.0] * 60), {"ticker": "T", "entry_price": 100.0}, rules)
+    assert "time_exit" not in _types(result)

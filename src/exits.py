@@ -97,7 +97,21 @@ def evaluate_exit(df, position, rules) -> dict:
                        f"on drying volume ({vol_ratio:.1f}x avg)"),
         })
 
+    # Live time-stop: free capital from a position that's just drifting sideways (no price
+    # signal fired) past `max_hold_days` CALENDAR days. Gated on entry_date, which live
+    # holdings carry but the backtest's synthetic positions do not — so the backtest, which
+    # owns its own bar-based max-hold force-close, is left byte-for-byte unchanged.
     last_ts = df.index[-1]
+    max_hold = int(defaults.get("max_hold_days", 0) or 0)
+    entry_date = position.get("entry_date")
+    if max_hold > 0 and entry_date:
+        held_days = (pd.Timestamp(last_ts) - pd.Timestamp(entry_date)).days
+        if held_days >= max_hold:
+            signals.append({
+                "type": "time_exit", "level": "sell", "emoji": "🔴",
+                "detail": f"held {held_days}d with no exit signal (max {max_hold}d) — freeing capital",
+            })
+
     as_of = str(last_ts.date()) if hasattr(last_ts, "date") else str(last_ts)
     return {
         "ticker": position["ticker"],

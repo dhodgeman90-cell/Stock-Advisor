@@ -51,6 +51,18 @@ def test_parse_report_extracts_only_top_candidates():
     assert recs[0]["source"] == "report" and recs[0]["entry_close"] is None
 
 
+def test_parse_report_reads_new_verdict_format():
+    # Reports switched to the verdict format on 2026-07-07 (no base score in the line); the
+    # backfill must read both. The stray "score" inside a reason must not fool the parser.
+    text = ("## Top candidates\n"
+            "- **AES** — Buy: driven by a news catalyst _(score 100/100 · low confidence)_\n"
+            "- **CVS** — Watch: strong score but falling estimates _(score 88/100 · low confidence)_\n"
+            "## Other scored (below shortlist)\n- ZZZ: 70/100\n")
+    recs = scorecard.parse_report(text, "2026-07-09")
+    assert [(r["ticker"], r["final_score"]) for r in recs] == [("AES", 100.0), ("CVS", 88.0)]
+    assert recs[0]["base_score"] is None and recs[0]["source"] == "report"
+
+
 def test_backfill_from_reports_is_idempotent_and_skips_non_briefings(tmp_path):
     reports = tmp_path / "reports"
     reports.mkdir()

@@ -46,7 +46,7 @@ def adjudicate(candidate: dict, news: dict, risk: dict, context: dict, caps: dic
 
     if risk.get("veto"):
         return {
-            "ticker": ticker, "base_score": base, "final_score": base,
+            "ticker": ticker, "base_score": base, "final_score": base, "rank_score": base,
             "vetoed": True, "veto_reason": risk.get("reason", ""),
             "news": news, "risk": risk, "regime": regime, "adjustments": [],
             "adjustment_detail": [],
@@ -191,10 +191,15 @@ def adjudicate(candidate: dict, news: dict, risk: dict, context: dict, caps: dic
     # negatives apply in full.
     pos = sum(d["points"] for d in detail if d["points"] > 0)
     neg = sum(d["points"] for d in detail if d["points"] < 0)
-    final = max(0.0, min(100.0, base + _soft_cap_positive(pos) + neg))
+    # `rank_score` is UNCAPPED — it's what the shortlist is sorted by, so a dozen names that
+    # all clamp to a displayed 100 still separate (and a negative like put flow / falling
+    # estimates actually pushes a name DOWN the ranking instead of vanishing under the clamp).
+    # `final_score` is the same value clamped to 0-100 — the number the reader sees.
+    rank = base + _soft_cap_positive(pos) + neg
+    final = max(0.0, min(100.0, rank))
 
     return {
-        "ticker": ticker, "base_score": base, "final_score": final,
+        "ticker": ticker, "base_score": base, "final_score": final, "rank_score": rank,
         "vetoed": False, "veto_reason": "",
         "news": news, "risk": risk, "regime": regime, "adjustments": adjustments,
         "adjustment_detail": detail,

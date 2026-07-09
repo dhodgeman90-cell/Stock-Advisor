@@ -30,6 +30,14 @@ def test_should_skip_today_runs_on_half_days():
     assert main._should_skip_today(dt.date(2026, 11, 27)) is False
 
 
+def test_count_live_signals_ignores_neutral_bundle():
+    # A fully-degraded enrichment bundle counts 0 live signals; one real analyst dict counts 1.
+    # This is what lets the briefing flag a momentum-only pick as "thin data".
+    assert main._count_live_signals(main._neutral_bundle()) == 0
+    sigs = {**main._neutral_bundle(), "analyst": {"rating": "buy", "upside_pct": 10}}
+    assert main._count_live_signals(sigs) == 1
+
+
 def test_should_skip_today_force_overrides_everything():
     assert main._should_skip_today(dt.date(2026, 6, 13), force=True) is False    # weekend
     assert main._should_skip_today(dt.date(2026, 12, 25), force=True) is False   # holiday

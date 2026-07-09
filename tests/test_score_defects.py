@@ -109,3 +109,19 @@ def test_atr_stop_off_by_default_keeps_flat_stop():
     out = exits.evaluate_exit(df, {"ticker": "VOL", "entry_price": price / 0.90}, rules)
     stop = next((s for s in out["signals"] if s["type"] == "stop_loss"), None)
     assert stop is not None and "stop -5%" in stop["detail"]
+
+
+# ---- ranking discrimination (uncapped rank_score) ------------------------
+def test_ranking_separates_negatives_even_when_both_display_100():
+    # Two names whose DISPLAYED score both clamp to 100; the one with bearish put flow must
+    # still rank BELOW the clean one, so the shortlist isn't a meaningless wall of tied 100s.
+    clean = adjudicator.adjudicate(
+        {"ticker": "CLEAN", "score": 88}, POS_NEWS, RISK, CTX, CAPS,
+        congress={"net_side": "buy", "n_members": 2, "fresh": True}, thresholds={})
+    drag = adjudicator.adjudicate(
+        {"ticker": "PUTS", "score": 88}, POS_NEWS, RISK, CTX, CAPS,
+        congress={"net_side": "buy", "n_members": 2, "fresh": True},
+        options={"call_volume": 200, "put_volume": 5000, "vol_oi_ratio": 1.0, "direction": "bearish"},
+        thresholds={"options_min_volume": 1000, "options_unusual_ratio": 0.5})
+    assert clean["final_score"] == drag["final_score"] == 100      # both clamp to the ceiling
+    assert clean["rank_score"] > drag["rank_score"]                # but the put flow ranks lower
