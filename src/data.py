@@ -8,22 +8,57 @@ WARMUP_DAYS = 100   # extra calendar days so the SMA-50 / MIN_HISTORY ramp is wa
 DATA_TIMEOUT = 20   # seconds; cap a hung yfinance socket instead of blocking a worker forever
 
 
-def _drop_incomplete(df):
-    """Drop rows missing any OHLC value.
+try:
+    from zoneinfo import ZoneInfo
 
-    yfinance intermittently returns a placeholder bar for the latest day that carries
-    volume but NaN prices (it varies ticker-to-ticker on any given morning). Such a bar
-    can never produce a valid price, yet it would otherwise become close.iloc[-1] and
-    surface as "price unavailable" + a silent "hold". Stripping these rows here means a
-    poisoned bar can never reach the engine — whether it arrives fresh from the network
-    or from a previously-cached CSV.
+    MARKET_TZ = ZoneInfo("America/New_York")
+except Exception:   # noqa: BLE001 - missing tzdata must not break data loading
+    MARKET_TZ = dt.timezone(dt.timedelta(hours=-4))   # ET fallback; only shifts the cutoff
+
+MARKET_CLOSE = dt.time(16, 0)   # regular-session close, New York
+
+
+def _session_complete(bar_date, now) -> bool:
+    """True once `bar_date`'s regular session has closed in New York."""
+    close_at = dt.datetime.combine(bar_date, MARKET_CLOSE, tzinfo=MARKET_TZ)
+    return now >= close_at
+
+
+def _drop_incomplete(df, now=None):
+    """Drop rows missing any OHLC value, then any trailing bar whose session is still open.
+
+    Two distinct poisons, both of which must never reach the engine — whether they arrive
+    fresh from the network or from a previously-cached CSV:
+
+    1. NaN-price placeholder bars. yfinance intermittently returns a bar for the latest day
+       carrying volume but NaN prices (it varies ticker-to-ticker on any given morning).
+       Such a bar can never produce a valid price, yet it would become close.iloc[-1] and
+       surface as "price unavailable" + a silent "hold".
+
+    2. LIVE INTRADAY BARS. `_window_bounds` asks for `end = today + 1`, so once the 09:30 ET
+       open passes, yfinance serves a bar for the CURRENT session with real OHLC and only
+       the volume traded so far. It survives check 1, and then `indicators.volume_ratio`
+       divides that part-day volume by a full-day 20-day average — collapsing the `volume`
+       component, which carries 30 of the 100 base points. Measured on 2026-07-27: scoring
+       573 cached names with vs. without the partial bar moved the mean score 47.3 -> 55.8
+       and left the top-8 shortlist overlapping by 1 of 8. The pick list became a function
+       of what time the run happened.
+
+    A bar is kept only once its session has closed, so a deliberate post-close run still
+    sees today. `now` is injectable for tests; it defaults to the real clock in ET.
     """
     if df is None or len(df) == 0:
         return df
     present = [c for c in OHLC_COLS if c in df.columns]
-    if not present:
+    if present:
+        df = df.dropna(subset=present)
+    if len(df) == 0:
         return df
-    return df.dropna(subset=present)
+    now = now or dt.datetime.now(MARKET_TZ)
+    keep = len(df)
+    while keep > 0 and not _session_complete(df.index[keep - 1].date(), now):
+        keep -= 1
+    return df if keep == len(df) else df.iloc[:keep]
 
 
 def validate(df, ticker: str, min_rows: int = 50):
@@ -53,10 +88,10 @@ def save_cache(df, ticker: str, data_dir) -> None:
     df.to_csv(cache_path(ticker, data_dir))
 
 
-def load_cache(ticker: str, data_dir):
+def load_cache(ticker: str, data_dir, now=None):
     path = cache_path(ticker, data_dir)
     if path.exists():
-        return _drop_incomplete(pd.read_csv(path, index_col=0, parse_dates=True))
+        return _drop_incomplete(pd.read_csv(path, index_col=0, parse_dates=True), now=now)
     return None
 
 

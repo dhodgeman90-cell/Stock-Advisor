@@ -30,6 +30,23 @@ def test_aggressive_overrides_weights_and_exits():
     assert x["backtest"]["max_hold_days"] == 30
 
 
+def test_preset_hold_period_reaches_the_LIVE_time_stop_not_just_the_backtest():
+    # exits.evaluate_exit reads defaults["max_hold_days"]; the preset only wrote
+    # backtest["max_hold_days"], so picking "Aggressive" (30-day holds) silently left the
+    # live time-stop at 180. The slider has to move both or it moves nothing you can trade.
+    base = {"defaults": {"stop_loss_pct": 8, "trailing_stop_pct": 20, "max_hold_days": 180},
+            "backtest": {"buy_threshold": 65, "max_hold_days": 250}}
+    x = objectives.apply_exit_rules(base, "aggressive")
+    assert x["defaults"]["max_hold_days"] == 30      # what exits.py actually reads
+    assert x["backtest"]["max_hold_days"] == 30      # backtest force-close still set
+
+
+def test_balanced_preset_leaves_the_live_hold_period_untouched():
+    base = {"defaults": {"stop_loss_pct": 8, "trailing_stop_pct": 20, "max_hold_days": 180},
+            "backtest": {"buy_threshold": 65, "max_hold_days": 250}}
+    assert objectives.apply_exit_rules(base, "balanced") == base   # identity preset
+
+
 def test_unknown_key_falls_back_to_balanced():
     base = {"breakout": 30, "volume": 30, "momentum": 20, "trend": 15, "pullback": 5}
     assert objectives.normalize("nonsense") == "balanced"

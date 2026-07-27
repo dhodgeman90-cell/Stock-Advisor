@@ -76,6 +76,11 @@ def apply_exit_rules(base_rules: dict, key) -> dict:
     if preset["buy_threshold"] is not None:
         rules["backtest"]["buy_threshold"] = preset["buy_threshold"]
     if preset["max_hold_days"] is not None:
+        # BOTH dicts: exits.evaluate_exit reads defaults["max_hold_days"] for the LIVE
+        # time-stop, while simulate_ticker reads backtest["max_hold_days"] for its bar-based
+        # force-close. Writing only the backtest key made the slider's holding period a
+        # backtest-only knob — "Aggressive" (30 days) still held live positions for 180.
+        rules["defaults"]["max_hold_days"] = preset["max_hold_days"]
         rules["backtest"]["max_hold_days"] = preset["max_hold_days"]
     return rules
 

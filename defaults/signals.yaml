@@ -1,0 +1,15 @@
+# Tunables for the daily-swing signal sources (social, congress, insights).
+# Anything omitted here falls back to the built-in defaults in src/config.py.
+
+thresholds:
+  congress_large_usd: 50000   # disclosure size that counts as a "big" trade
+  social_min_mentions: 25     # ignore WSB buzz below this many mentions
+  earnings_window_days: 5     # demote new entries with earnings within N days
+  options_unusual_ratio: 0.5  # total option volume / open interest above this = unusual flow
+  options_min_volume: 1000    # ignore option flow below this many contracts (too thin)
+  short_high_pct: 20          # short interest (% of float) at/above which squeeze logic applies
+  sec_window_days: 30         # how recent an SEC filing must be to count as a signal
+
+discovery:
+  congress_lookback_days: 30  # how recently a trade must have been disclosed to surface
+  top_n: 8                    # max rows in the "outside the watchlist" discovery feed

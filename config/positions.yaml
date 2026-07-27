@@ -12,4 +12,15 @@
 #     take_profit_pct: 25
 #     trailing_stop_pct: 12
 #     entry_date: 2026-06-01
-positions: []
+# Real purchase dates, supplied by the owner 2026-07-27. SnapTrade does not return a
+# purchase date, so without these the trailing stop would track the peak only from the day
+# the first-seen store was created (2026-07-27) and would not protect gains already banked.
+positions:
+  - ticker: QURE
+    entry_date: 2026-06-17
+  - ticker: GOOGL
+    entry_date: 2026-06-29
+  - ticker: AMZN
+    entry_date: 2026-07-07
+  - ticker: JPM
+    entry_date: 2026-07-22

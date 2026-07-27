@@ -11,7 +11,10 @@ Configuration (all in .env, set up once via `python -m src.link_broker`):
 
 SnapTrade does brokerage 2FA once at link time, so unattended runs never block on a code.
 """
+import json
 import os
+from datetime import date
+from pathlib import Path
 
 from src import config
 
@@ -130,15 +133,60 @@ def fetch_holdings(*, client_factory=_client,
     return _aggregate(raw)
 
 
+# ---- first-seen dates (the entry_date SnapTrade doesn't give us) ---------------------
+
+FIRST_SEEN_FILE = "position_first_seen.json"
+
+
+def _stamp_first_seen(holdings, data_dir, today) -> list:
+    """Fill each holding's `entry_date` from a local ticker -> first-seen-date store.
+
+    SnapTrade positions carry no purchase date, and `_aggregate` therefore emitted
+    `entry_date: ""`. That blank silently disabled the two exits that protect a WINNER:
+    `main.run` fell back to `peak = entry_price`, which collapses exits.py's trailing-stop
+    test to `price <= price * (1 - trail)` — never true — and `exits.py`'s live time-stop is
+    gated on a truthy entry_date. Only the 8% catastrophe stop measured from entry survived,
+    so a position that doubled and round-tripped to breakeven never emitted a sell.
+
+    First-seen is a LOWER bound on the true holding period for anything bought before the
+    store existed, so the peak it yields is a lower bound too and the trailing stop fires
+    no EARLIER than it should — conservative, never a false sell. Pin the real date in
+    positions.yaml (`entry_date:`) when you know it; that override is merged after this and
+    wins. Tickers that leave the book are pruned so a re-buy restarts the clock.
+    """
+    path = Path(data_dir) / FIRST_SEEN_FILE
+    try:
+        seen = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(seen, dict):
+            seen = {}
+    except Exception:   # noqa: BLE001 - missing or corrupt store rebuilds, never breaks a sync
+        seen = {}
+
+    held = {p["ticker"] for p in holdings}
+    seen = {t: d for t, d in seen.items() if t in held}     # prune closed positions
+    for ticker in held:
+        seen.setdefault(ticker, today)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(seen, indent=2, sort_keys=True), encoding="utf-8")
+    except Exception:   # noqa: BLE001 - an unwritable store must not break the briefing
+        pass
+    return [{**p, "entry_date": p.get("entry_date") or seen.get(p["ticker"], "")}
+            for p in holdings]
+
+
 def resolve_positions(*, configured=is_configured, fetch=fetch_holdings,
                       load_positions=config.load_positions,
                       load_overrides=config.load_position_overrides,
-                      on_error=None) -> list:
+                      on_error=None, data_dir=None, today=None) -> list:
     """The holdings source for the briefing.
 
     SnapTrade when configured (merging optional per-ticker overrides from positions.yaml);
     otherwise the positions.yaml file. If a live sync errors, fall back to positions.yaml
     so the daily briefing never breaks on a SnapTrade outage.
+
+    `data_dir` enables first-seen entry_date stamping (see `_stamp_first_seen`); omitting it
+    leaves holdings exactly as fetched.
     """
     if not configured():
         return load_positions()
@@ -148,5 +196,7 @@ def resolve_positions(*, configured=is_configured, fetch=fetch_holdings,
         if on_error is not None:
             on_error(e)
         return load_positions()
+    if data_dir is not None:
+        live = _stamp_first_seen(live, data_dir, today or date.today().isoformat())
     overrides = load_overrides()
     return [{**p, **overrides.get(p["ticker"], {})} for p in live]
