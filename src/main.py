@@ -178,6 +178,31 @@ def _has_priority_signal(ticker, congress_agg, wsb_map, min_mentions) -> bool:
     return False
 
 
+def _rs_reranked(ranked, df_by_ticker, spy_close):
+    """Re-rank the shortlist by the relative-strength entry model (opt-in): cross-sectional RS
+    percentile vs SPY blended with a constructive-pullback preference, replacing the
+    breakout-chasing sort. Demotes fresh-high chasers within the shortlist — the inverted-top-band
+    fix. Returns a new list, highest first."""
+    rs_by = {r["ticker"]: scoring.relative_strength(df_by_ticker[r["ticker"]]["Close"], spy_close)
+             for r in ranked if df_by_ticker.get(r["ticker"]) is not None}
+    rs_pct = scoring.cross_sectional_rank(rs_by)
+
+    def _val(r):
+        df_r = df_by_ticker.get(r["ticker"])
+        return (scoring.rs_entry_rank(df_r, rs_pct.get(r["ticker"], 0.5))
+                if df_r is not None else -1.0)
+    return sorted(ranked, key=_val, reverse=True)
+
+
+def _confirmed_regime(spy_hist):
+    """Today's confirmed market regime from SPY history: regime_series + hysteresis, last bar.
+    'risk_on' on any error / short history — never go defensive without a clear, confirmed signal."""
+    try:
+        return market.apply_hysteresis(market.regime_series(spy_hist)).iloc[-1]
+    except Exception:
+        return "risk_on"
+
+
 def run(profile: Profile | None = None, force: bool = False, *, fetch=None,
         fetch_batch=None) -> RunResult:
     # Make console output crash-proof: the briefing contains emojis that the legacy
@@ -219,6 +244,9 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None,
     settings = wl["settings"]
     lookback = settings.get("lookback_days", 200)
     shortlist_size = settings.get("shortlist_size", 8)
+    # Opt-in, default-off features (defaults keep the briefing byte-for-byte identical):
+    entry_model = settings.get("entry_model", "legacy")            # "relative_strength" to enable
+    regime_overlay = settings.get("regime_overlay", False)         # True = defensive in bear regimes
 
     data_dir = profile.data_dir
     reports_dir = profile.reports_dir
@@ -417,10 +445,24 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None,
         )
         adjd["data_signals_live"] = _count_live_signals(sigs)
         (vetoed if adjd["vetoed"] else ranked).append(adjd)
-    # Sort by the UNCAPPED rank_score, not the clamped final_score: otherwise a dozen names
-    # that all pin at a displayed 100 tie and fall back to arbitrary order, and negatives
-    # (put flow, falling estimates) that push past the clamp become invisible to the ranking.
-    ranked.sort(key=lambda r: r.get("rank_score", r["final_score"]), reverse=True)
+    # Opt-in features need SPY history (regime signal + relative strength). Fetch once, only when
+    # a feature is on, degrading to legacy behavior if it fails — the default run never fetches SPY
+    # here and stays byte-identical.
+    spy_hist = None
+    if entry_model == "relative_strength" or regime_overlay:
+        try:
+            spy_hist = fetch("SPY", lookback)
+        except Exception as e:
+            print(f"[regime/RS features: SPY fetch failed, using legacy behavior: {e}]")
+    if entry_model == "relative_strength" and spy_hist is not None:
+        # Re-rank the shortlist by relative strength + constructive pullback (fixes the inverted
+        # top band) instead of the breakout-tilted rank_score.
+        ranked = _rs_reranked(ranked, df_by_ticker, spy_hist["Close"])
+    else:
+        # Sort by the UNCAPPED rank_score, not the clamped final_score: otherwise a dozen names
+        # that all pin at a displayed 100 tie and fall back to arbitrary order, and negatives
+        # (put flow, falling estimates) that push past the clamp become invisible to the ranking.
+        ranked.sort(key=lambda r: r.get("rank_score", r["final_score"]), reverse=True)
     # Display cap: show only the top `shortlist_size` enriched candidates so the briefing stays
     # concise on a wide universe; the enriched-but-not-shown drop into "other scored".
     if len(ranked) > shortlist_size:
@@ -454,8 +496,17 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None,
         print("[AI agents skipped: no actionable buy/sell signals today — "
               "running on deterministic signals only]")
 
+    # Defensive overlay (opt-in): in a CONFIRMED risk-off regime, recommend no new buys. Validated
+    # as a DRAWDOWN reducer, NOT an index-beater (it loses to buy-and-hold in a bull market). Default
+    # off -> max_adds unchanged, briefing byte-identical.
+    effective_max_adds = MAX_ADDS
+    if regime_overlay and spy_hist is not None and _confirmed_regime(spy_hist) == "risk_off":
+        effective_max_adds = 0
+        print("[defensive mode: confirmed risk-off regime — recommending no new buys "
+              "(reduces drawdown; does NOT beat the index in a bull market)]")
     rotation_plan = rotation.build_rotation_plan(
-        holdings, ranked, conviction=exit_rules["backtest"]["buy_threshold"], max_adds=MAX_ADDS,
+        holdings, ranked, conviction=exit_rules["backtest"]["buy_threshold"],
+        max_adds=effective_max_adds,
     )
 
     # Reality-check header: grade our OWN past picks vs SPY and put the number at the top of
