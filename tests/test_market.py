@@ -1,3 +1,5 @@
+import pandas as pd
+
 from src import market
 
 
@@ -78,3 +80,53 @@ def test_get_macro_context_falls_back_on_error():
         raise RuntimeError("down")
     out = market.get_macro_context(fetch=boom)
     assert out["macro_regime"] == "neutral"
+
+
+# ---- point-in-time regime series (Phase 1) ----
+
+def _spy(prices):
+    idx = pd.date_range("2021-01-01", periods=len(prices), freq="D")
+    return pd.DataFrame({"Open": prices, "High": prices, "Low": prices,
+                         "Close": prices, "Volume": 1_000_000}, index=idx)
+
+
+def test_regime_series_risk_on_when_price_above_stacked_rising_mas():
+    prices = [100.0 + i for i in range(300)]          # steadily rising: close > sma50 > sma200
+    reg = market.regime_series(_spy(prices))
+    assert reg.iloc[-1] == "risk_on"
+
+
+def test_regime_series_risk_off_when_below_200d_and_deep_drawdown():
+    up = [100.0 + i for i in range(200)]              # rise to a 299 peak over 200 bars
+    down = [299.0 - 3.0 * i for i in range(80)]       # then crash far below the 200-day MA
+    reg = market.regime_series(_spy(up + down))
+    assert reg.iloc[-1] == "risk_off"
+
+
+def test_regime_series_neutral_during_slow_ma_warmup():
+    prices = [100.0 + i for i in range(120)]          # < 200 bars -> sma200 NaN -> no signal
+    reg = market.regime_series(_spy(prices))
+    assert (reg == "neutral").all()
+
+
+def test_regime_series_is_as_of_stable():
+    # The regime at bar k must not change when later bars are appended (no look-ahead).
+    prices = [100.0 + 20.0 * (i % 7) - 0.05 * i for i in range(300)]
+    df = _spy(prices)
+    k = 250
+    assert market.regime_series(df.iloc[:k]).iloc[-1] == market.regime_series(df).iloc[k - 1]
+
+
+def test_apply_hysteresis_ignores_a_single_risk_off_bar():
+    raw = pd.Series(["risk_on"] * 5 + ["risk_off"] + ["risk_on"] * 5)
+    out = market.apply_hysteresis(raw, confirm_down=3, confirm_up=5)
+    assert (out == "risk_on").all()                   # one red bar never cuts exposure
+
+
+def test_apply_hysteresis_cuts_after_confirm_down_and_restores_after_confirm_up():
+    raw = pd.Series(["risk_on"] * 3 + ["risk_off"] * 3 + ["risk_on"] * 5)
+    out = market.apply_hysteresis(raw, confirm_down=3, confirm_up=5)
+    assert out.iloc[4] == "risk_on"                   # 2 consecutive risk_off: not yet cut
+    assert out.iloc[5] == "risk_off"                  # 3rd consecutive risk_off: cut
+    assert out.iloc[-2] == "risk_off"                 # only 4 risk_on since: still defensive
+    assert out.iloc[-1] == "risk_on"                  # 5th consecutive risk_on: restored

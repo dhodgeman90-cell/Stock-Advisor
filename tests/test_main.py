@@ -106,6 +106,8 @@ def test_ai_is_actionable_false_on_a_quiet_day():
     assert main._ai_is_actionable(holdings, projected_scores=[50, 64], buy_threshold=65) is False
 
 
+import pandas as pd
+
 import tests.helpers as helpers
 from src.profile import Profile, EnvSecrets
 
@@ -179,6 +181,27 @@ def test_run_honors_profile_dirs_and_returns_result(tmp_path, monkeypatch):
     assert result.report_path == report
     assert result.html != ""                       # structured html captured
     assert isinstance(result.ranked, list)
+
+
+# ---- Phase 4: opt-in RS entry re-rank + defensive regime overlay ----
+
+def test_rs_reranked_orders_by_relative_strength_not_input_order():
+    spy_close = pd.Series([100.0] * 60)                          # flat market
+    df_by = {"STRONG": helpers.make_df(list(range(100, 160))),   # rises vs flat SPY -> high RS
+             "WEAK": helpers.make_df([160.0 - i for i in range(60)])}  # downtrend -> low RS
+    ranked = [{"ticker": "WEAK", "rank_score": 99}, {"ticker": "STRONG", "rank_score": 1}]
+    out = main._rs_reranked(ranked, df_by, spy_close)
+    assert out[0]["ticker"] == "STRONG"                          # RS overrides the input order
+
+
+def test_confirmed_regime_risk_off_on_crash_risk_on_on_uptrend():
+    crash = helpers.make_df([100.0 + i for i in range(250)] + [349.0 - 3.0 * i for i in range(60)])
+    assert main._confirmed_regime(crash) == "risk_off"
+    assert main._confirmed_regime(helpers.make_df(list(range(100, 400)))) == "risk_on"
+
+
+def test_confirmed_regime_defaults_risk_on_on_short_history():
+    assert main._confirmed_regime(helpers.make_df([100.0] * 20)) == "risk_on"
 
 
 def test_run_routes_signal_caches_to_profile_data_dir(tmp_path, monkeypatch):
