@@ -203,6 +203,16 @@ def _confirmed_regime(spy_hist):
         return "risk_on"
 
 
+REGIME_MIN_DAYS = 400   # regime_series needs a 200-day MA; a 200-day universe lookback is only
+                        # ~206 trading bars (MA valid on ~3), so size the SPY pull independently.
+
+
+def _regime_fetch_days(lookback):
+    """SPY history window for the regime/RS features: at least REGIME_MIN_DAYS so the 200-day MA
+    (and the hysteresis on it) has enough valid bars, regardless of the universe lookback."""
+    return max(lookback, REGIME_MIN_DAYS)
+
+
 def run(profile: Profile | None = None, force: bool = False, *, fetch=None,
         fetch_batch=None) -> RunResult:
     # Make console output crash-proof: the briefing contains emojis that the legacy
@@ -451,7 +461,7 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None,
     spy_hist = None
     if entry_model == "relative_strength" or regime_overlay:
         try:
-            spy_hist = fetch("SPY", lookback)
+            spy_hist = fetch("SPY", _regime_fetch_days(lookback))
         except Exception as e:
             print(f"[regime/RS features: SPY fetch failed, using legacy behavior: {e}]")
     if entry_model == "relative_strength" and spy_hist is not None:

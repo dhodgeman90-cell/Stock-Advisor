@@ -204,6 +204,14 @@ def test_confirmed_regime_defaults_risk_on_on_short_history():
     assert main._confirmed_regime(helpers.make_df([100.0] * 20)) == "risk_on"
 
 
+def test_regime_fetch_days_guarantees_enough_for_200d_ma():
+    # A 200-calendar-day lookback is only ~206 trading bars -> the 200-day MA is valid on
+    # almost none of them, so the regime overlay would silently never fire. The SPY regime
+    # window must be bumped independently of the universe lookback.
+    assert main._regime_fetch_days(200) >= 400
+    assert main._regime_fetch_days(600) == 600      # honors a larger lookback unchanged
+
+
 def test_run_routes_signal_caches_to_profile_data_dir(tmp_path, monkeypatch):
     """main.run must thread profile.data_dir into the WSB + congress cache paths so a
     per-user install never writes signal caches into the repo/install dir (data isolation)."""
