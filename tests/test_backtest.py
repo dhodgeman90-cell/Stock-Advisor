@@ -344,3 +344,54 @@ def test_report_includes_max_drawdown_lines():
                                            strategy_dd=-9.0, buyhold_dd=-28.0)
     assert "Strategy max drawdown: **-9.0%**" in text
     assert "Buy-and-hold max drawdown: **-28.0%**" in text
+
+
+# ---- per-regime summary (Phase 0) ----
+
+def _long_flat_df(start="2021-06-01", periods=1400, price=100.0):
+    idx = pd.date_range(start, periods=periods, freq="D")
+    return pd.DataFrame({"Open": price, "High": price, "Low": price,
+                         "Close": price, "Volume": 1_000_000}, index=idx)
+
+
+def test_per_regime_summary_runs_each_window_with_enough_data():
+    histories = {"T": _long_flat_df()}               # 2021-06 .. ~2025-04, spans every window
+    out = backtest.per_regime_summary(histories, {"T": {}}, WEIGHTS, FULL_RULES, SETTINGS,
+                                      CAPS, THRESH, presets=["balanced"], sec_window=30)
+    assert "full" in out and "2022_selloff" in out
+    assert "per_preset" in out["full"] and "baseline" in out["full"]
+
+
+def test_per_regime_summary_isolates_a_down_regime():
+    # Price falls across 2022 (~100 -> ~60), recovers after. The 2022 slice's buy-and-hold
+    # baseline must be negative even though the full cycle recovers.
+    idx = pd.date_range("2021-06-01", periods=1400, freq="D")
+    prices = []
+    for ts in idx:
+        if ts.year < 2022:
+            prices.append(100.0)
+        elif ts.year == 2022:
+            prices.append(100.0 - 0.11 * ts.dayofyear)   # ~100 in Jan -> ~60 by Dec
+        else:
+            prices.append(60.0 + 0.03 * ts.dayofyear)
+    df = pd.DataFrame({"Open": prices, "High": prices, "Low": prices,
+                       "Close": prices, "Volume": 1_000_000}, index=idx)
+    out = backtest.per_regime_summary({"T": df}, {"T": {}}, WEIGHTS, FULL_RULES, SETTINGS,
+                                      CAPS, THRESH, presets=["balanced"], sec_window=30)
+    assert out["2022_selloff"]["baseline"] < 0
+
+
+def test_render_enriched_report_appends_per_regime_table_when_given():
+    core = {
+        "per_preset": {"balanced": {
+            "label": "Balanced", "tax_pct": 0,
+            "enriched": {"summary": backtest.summarize([]), "compounded": 3.0, "dd": -5.0},
+            "base": {"summary": backtest.summarize([]), "compounded": 0.0}}},
+        "baseline": 10.0, "buyhold_dd": -20.0, "coverage_pct": 30.0, "n_names": 1,
+        "best_enriched": 3.0, "beat_buyhold": False,
+    }
+    text = backtest.render_enriched_report(core, "2026-07-27", years=6,
+                                           per_regime={"2022_selloff": core, "full": core})
+    assert "Per-regime" in text and "2022" in text
+    # Without per_regime the section is omitted (existing callers unchanged).
+    assert "Per-regime" not in backtest.render_enriched_report(core, "2026-07-27", years=6)

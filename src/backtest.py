@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from src import config, data, scoring, exits, adjudicator, edgar, objectives
+from src import config, data, scoring, exits, adjudicator, edgar, objectives, regimes
 
 ROOT = Path(__file__).resolve().parent.parent
 MIN_HISTORY = 60   # 50 rows for the SMA-50 warm-up + ~10 days before the first decision
@@ -446,7 +446,40 @@ def enriched_backtest_core(histories, recent_by_ticker, base_weights, base_rules
     }
 
 
-def render_enriched_report(core, date_str, label="default", *, years=None, date_range=None) -> str:
+def per_regime_summary(histories, recent_by_ticker, base_weights, base_rules, settings,
+                       caps, thresholds, *, presets=None, sec_window=30) -> dict:
+    """Run the enriched backtest on each regime sub-window (2022 selloff, 2023-24 bull,
+    2025-26, full cycle). Returns {regime_name: core}. A window with too little in-range
+    history to trade is skipped, so a strategy is judged on the down/flat regimes — not
+    just the bull run that flatters it. Pure (no network); reuses enriched_backtest_core."""
+    out = {}
+    for name, (start, end) in regimes.SUBPERIODS.items():
+        sliced = regimes.slice_histories(histories, start, end)
+        if not sliced:
+            continue
+        out[name] = enriched_backtest_core(
+            sliced, recent_by_ticker, base_weights, base_rules, settings,
+            caps, thresholds, presets=presets, sec_window=sec_window)
+    return out
+
+
+def _best_preset(core):
+    """(label, compounded, dd) of the highest-compounded enriched preset in a core."""
+    best = None
+    for p in core["per_preset"].values():
+        c = p["enriched"]["compounded"]
+        if best is None or c > best[1]:
+            best = (p["label"], c, p["enriched"]["dd"])
+    return best or ("—", 0.0, 0.0)
+
+
+def _ret_per_dd(ret, dd) -> float:
+    """Return per unit of drawdown (Calmar-style). 0 drawdown -> 0.0 to stay finite."""
+    return ret / abs(dd) if dd else 0.0
+
+
+def render_enriched_report(core, date_str, label="default", *, years=None, date_range=None,
+                           per_regime=None) -> str:
     win = f"{date_range[0]} → {date_range[1]}" if date_range else f"~{years}y"
     tax_pct = next((p["tax_pct"] for p in core["per_preset"].values()), 0)
     L = [
@@ -491,6 +524,18 @@ def render_enriched_report(core, date_str, label="default", *, years=None, date_
               "daily-trading these names shows **no measured edge here — do not start P1 "
               "feature work on this evidence.** Grow the ledger (P0-b) and re-check across "
               "more regimes first."]
+    if per_regime:
+        L += ["", "### Per-regime — best preset vs buy-and-hold",
+              "A timing strategy can only beat buy-and-hold over a full cycle by LOSING LESS "
+              "in the down/flat regimes. This splits the same run by market regime so that "
+              "edge (or its absence) is visible, not averaged away by the bull run.", "",
+              "| Regime | Best preset | Return | MaxDD | Return/DD | B&H return | B&H MaxDD |",
+              "|---|---|---|---|---|---|---|"]
+        for name, rc in per_regime.items():
+            plabel, ret, dd = _best_preset(rc)
+            L.append(f"| {name.replace('_', ' ')} | {plabel} | {ret:+.1f}% | {dd:+.1f}% | "
+                     f"{_ret_per_dd(ret, dd):.2f} | {rc['baseline']:+.1f}% | "
+                     f"{rc['buyhold_dd']:+.1f}% |")
     L += ["",
           "> Caveat: partial-engine, single-window, free-data backtest. Overfitting and "
           "survivorship risk remain — confirm against the live scorecard as the ledger grows.",
@@ -530,6 +575,10 @@ def run_enriched(watchlist_name=None, *, years=None) -> str:
 
     core = enriched_backtest_core(histories, recent_by_ticker, base_weights, base_rules,
                                   settings, caps, thresholds, sec_window=sec_window)
+    # Per-regime breakdown so the strategy is judged on the 2022 selloff + flat stretches,
+    # not just the bull run. Backtest-only; no effect on the live briefing.
+    per_regime = per_regime_summary(histories, recent_by_ticker, base_weights, base_rules,
+                                    settings, caps, thresholds, sec_window=sec_window)
     label = watchlist_name or "default"
     date_str = dt.date.today().isoformat()
     date_range = None
@@ -537,7 +586,8 @@ def run_enriched(watchlist_name=None, *, years=None) -> str:
         starts = [df.index[0] for df in histories.values()]
         ends = [df.index[-1] for df in histories.values()]
         date_range = (str(min(starts).date()), str(max(ends).date()))
-    text = render_enriched_report(core, date_str, label=label, years=years, date_range=date_range)
+    text = render_enriched_report(core, date_str, label=label, years=years,
+                                  date_range=date_range, per_regime=per_regime)
 
     reports_dir = ROOT / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
