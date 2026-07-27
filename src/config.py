@@ -189,8 +189,19 @@ def load_positions(config_dir=CONFIG_DIR) -> list:
     if not isinstance(raw, list):
         raise ValueError("positions.yaml 'positions' must be a list")
     out = []
+    # This file serves two roles: the SnapTrade-failure FALLBACK (rows describing a real
+    # position) and the per-ticker OVERRIDES read by load_position_overrides (entry_date,
+    # stop widths). A row carrying only a ticker plus override keys is not a position — skip
+    # it rather than raise, or pinning an entry_date would crash the briefing the moment a
+    # sync failed. A row with position-ish keys but no entry_price is still a real mistake.
+    _OVERRIDE_KEYS = {"entry_date", "stop_loss_pct", "take_profit_pct", "trailing_stop_pct"}
     for p in raw:
-        if "ticker" not in p or "entry_price" not in p:
+        if "entry_price" not in p:
+            # Skip ONLY a row that is a genuine override (ticker + at least one override key
+            # and nothing else). A bare ticker, or a row with position keys like `shares`,
+            # is still a mistake and must raise.
+            if "ticker" in p and set(p) - {"ticker"} and set(p) - {"ticker"} <= _OVERRIDE_KEYS:
+                continue
             raise ValueError("each position requires 'ticker' and 'entry_price'")
         if float(p["entry_price"]) <= 0:
             raise ValueError(f"{p['ticker']}: entry_price must be greater than 0")

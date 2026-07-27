@@ -131,3 +131,63 @@ def test_resolve_positions_merges_overrides_by_ticker():
     assert out["NVDA"]["take_profit_pct"] == 25
     assert out["NVDA"]["entry_price"] == 120.0          # live value preserved
     assert out["AAPL"]["stop_loss_pct"] is None         # no override -> untouched
+
+
+# ---- entry_date stamping -------------------------------------------------
+# SnapTrade positions carry no purchase date, and a blank entry_date silently disables
+# BOTH the trailing stop (peak collapses to entry, so `price <= peak*(1-trail)` can never
+# fire on a winner) and the live time-stop. These lock that shut.
+
+def _live(*tickers):
+    return [{"ticker": t, "entry_price": 100.0, "shares": 1, "entry_date": "",
+             "stop_loss_pct": None, "take_profit_pct": None, "trailing_stop_pct": None}
+            for t in tickers]
+
+
+def test_resolve_positions_never_returns_a_blank_entry_date(tmp_path):
+    out = broker.resolve_positions(
+        configured=lambda: True, fetch=lambda: _live("NVDA", "AAPL"),
+        data_dir=tmp_path, today="2026-07-27",
+    )
+    assert [p["ticker"] for p in out] == ["NVDA", "AAPL"]
+    assert all(p["entry_date"] for p in out), "a blank entry_date disables the trailing stop"
+    assert all(p["entry_date"] == "2026-07-27" for p in out)
+
+
+def test_first_seen_date_is_sticky_across_syncs(tmp_path):
+    broker.resolve_positions(configured=lambda: True, fetch=lambda: _live("NVDA"),
+                             data_dir=tmp_path, today="2026-07-01")
+    out = broker.resolve_positions(configured=lambda: True, fetch=lambda: _live("NVDA"),
+                                   data_dir=tmp_path, today="2026-07-27")
+    assert out[0]["entry_date"] == "2026-07-01"   # not re-stamped to today
+
+
+def test_closed_position_is_pruned_so_a_rebuy_restarts_the_clock(tmp_path):
+    broker.resolve_positions(configured=lambda: True, fetch=lambda: _live("NVDA"),
+                             data_dir=tmp_path, today="2026-07-01")
+    broker.resolve_positions(configured=lambda: True, fetch=lambda: _live("AAPL"),
+                             data_dir=tmp_path, today="2026-07-10")     # NVDA sold
+    out = broker.resolve_positions(configured=lambda: True, fetch=lambda: _live("NVDA"),
+                                   data_dir=tmp_path, today="2026-07-27")
+    assert out[0]["entry_date"] == "2026-07-27"   # re-bought -> fresh clock, not 2026-07-01
+
+
+def test_positions_yaml_entry_date_override_beats_first_seen(tmp_path):
+    out = broker.resolve_positions(
+        configured=lambda: True, fetch=lambda: _live("NVDA"),
+        load_overrides=lambda: {"NVDA": {"entry_date": "2026-01-15"}},
+        data_dir=tmp_path, today="2026-07-27",
+    )
+    assert out[0]["entry_date"] == "2026-01-15"   # you know the real date; we defer to it
+
+
+def test_entry_date_stamping_is_skipped_without_a_data_dir():
+    out = broker.resolve_positions(configured=lambda: True, fetch=lambda: _live("NVDA"))
+    assert out[0]["entry_date"] == ""   # no store to write to -> unchanged, never crashes
+
+
+def test_unreadable_first_seen_store_does_not_break_the_sync(tmp_path):
+    (tmp_path / "position_first_seen.json").write_text("{ not json", encoding="utf-8")
+    out = broker.resolve_positions(configured=lambda: True, fetch=lambda: _live("NVDA"),
+                                   data_dir=tmp_path, today="2026-07-27")
+    assert out[0]["entry_date"] == "2026-07-27"   # corrupt store is rebuilt, not fatal

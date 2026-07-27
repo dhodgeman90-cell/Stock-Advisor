@@ -212,6 +212,55 @@ def test_regime_fetch_days_guarantees_enough_for_200d_ma():
     assert main._regime_fetch_days(600) == 600      # honors a larger lookback unchanged
 
 
+# ---- adds_paused: stop recommending buys while the engine is unvalidated ----
+
+def _buyable_df():
+    """A frame that clears the 65 buy threshold: rising (trend 15) + at a 20-day high
+    (breakout 30) + a 2x volume spike on the last bar (volume 30) = 75."""
+    df = helpers.make_df([10 + i * 0.1 for i in range(160)])
+    df.iloc[-1, df.columns.get_loc("Volume")] = df["Volume"].iloc[-20:].mean() * 2.5
+    return df
+
+
+def _offline_run(tmp_path, monkeypatch, extra_settings=""):
+    """Fully-offline main.run() over one strongly-rising ticker (scores well above 65)."""
+    cfg = tmp_path / "config"
+    _seed_min_config(cfg)
+    (cfg / "watchlist.yaml").write_text(
+        "tickers:\n  - AAA\nsettings:\n  lookback_days: 120\n  shortlist_size: 2\n"
+        + extra_settings, encoding="utf-8")
+    monkeypatch.setattr(main.social, "get_wsb_sentiment", lambda **kw: {})
+    monkeypatch.setattr(main.congress, "get_congress_trades", lambda **kw: [])
+    monkeypatch.setattr(main.congress, "aggregate_by_ticker", lambda trades: {})
+    monkeypatch.setattr(main.market, "get_market_breadth",
+                        lambda: {"regime": "neutral", "regime_hint": "VIX calm"})
+    monkeypatch.setattr(main.insights, "get_insider_signal", lambda t: None)
+    monkeypatch.setattr(main.insights, "get_analyst_signal", lambda t: None)
+    monkeypatch.setattr(main.insights, "get_earnings", lambda t: None)
+    _stub_signal_feeds(monkeypatch)
+    monkeypatch.setattr(main.news, "get_headlines", lambda t: [])
+    profile = Profile(config_dir=cfg, data_dir=tmp_path / "data",
+                      reports_dir=tmp_path / "reports", secrets=EnvSecrets(values={}))
+    return main.run(profile=profile, force=True,
+                    fetch=lambda ticker, lookback: _buyable_df())
+
+
+def test_adds_paused_suppresses_every_buy_but_keeps_exit_advice(tmp_path, monkeypatch):
+    # The engine has no measured edge, so the owner can silence BUY advice without
+    # losing the sell side (which is what actually protects an open position).
+    res = _offline_run(tmp_path, monkeypatch, extra_settings="  adds_paused: true\n")
+    assert res.rotation_plan["adds"] == []
+    assert "adds" in res.rotation_plan and "exits" in res.rotation_plan
+    assert res.ranked, "candidates are still scored and shown — only the BUY call is withheld"
+
+
+def test_adds_are_recommended_when_not_paused(tmp_path, monkeypatch):
+    # Guard the guard: without the flag the same run DOES produce an add, so the test
+    # above proves the flag works rather than that the fixture never adds anything.
+    res = _offline_run(tmp_path, monkeypatch)
+    assert res.rotation_plan["adds"], "fixture must produce an add when unpaused"
+
+
 def test_run_routes_signal_caches_to_profile_data_dir(tmp_path, monkeypatch):
     """main.run must thread profile.data_dir into the WSB + congress cache paths so a
     per-user install never writes signal caches into the repo/install dir (data isolation)."""

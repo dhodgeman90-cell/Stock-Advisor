@@ -15,3 +15,18 @@ settings:
   min_price: 5.0
   min_avg_volume: 500000        # legacy share-count floor (no longer used by scoring)
   min_dollar_volume: 10000000   # liquidity gate: $10M/day traded value (price x shares)
+  adds_paused: true               # withhold BUY calls pending validation. The sell side
+                                  # (exits/trims on open positions) stays fully live, and
+                                  # candidates are still scored and shown. Set false to resume.
+  # --- both OFF pending Phase 2/3 (2026-07-27 audit) ---
+  # entry_model: relative_strength
+  #   Re-ranks only INSIDE the 25 names the legacy breakout+volume pre-filter already chose,
+  #   and cross_sectional_rank is computed over that shortlist, so the 55-point RS term is
+  #   renormalized 0..1 within an already-weak pool and carries no absolute strength signal.
+  #   It also has zero backtest and zero forward test (rs_entry_rank is called only from
+  #   main.py and appears nowhere in backtest.py). Re-enable once ranking moves upstream of
+  #   the pre-filter (Phase 2) and a full-universe backtest exists (Phase 3).
+  # regime_overlay: true
+  #   Its own kill criterion returned "DO NOT SHIP" (3 of 4 checks FAIL) in
+  #   reports/backtest-regime-default-2026-07-27.md. Re-enable only after the gate is
+  #   re-specified to match its actual claim (drawdown reduction, not alpha) and passes.

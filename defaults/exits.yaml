@@ -1,19 +1,36 @@
 defaults:
-  stop_loss_pct: 5
-  atr_stop_mult: 0            # >0 enables a volatility-scaled stop (see config/exits.yaml)
-  atr_period: 14
-  take_profit_pct: 20
-  take_profit_mode: trailing
-  trailing_stop_pct: 6
-  trend_break_fast: 20
-  trend_break_slow: 50
-  trend_break_slow_level: watch
+  # Exit widths set by the 2026-07-09 walk-forward sweep (train 2022-24 / holdout 2025-26, 10
+  # names). The old 5%/6% stops were pathological: they cut the holdout return to +12.7% when
+  # 8%/20% yields ~+50% (≈4x, consistent in BOTH windows) for only ~3pts more drawdown. Tight
+  # stops don't buy safety here — they just churn out of every winner on a normal pullback.
+  stop_loss_pct: 8            # sell if price <= entry * (1 - 0.08). Catastrophe stop; the trailing
+                              # stop below usually triggers first on a name that ran and rolled over.
+  atr_stop_mult: 2.5          # volatility-scaled: stop = mult*ATR/price, clamped to [0.5x, 2x] the
+                              # flat stop (wider on high-vol names to cut whipsaw). The sweep showed
+                              # a small but consistent gain from enabling it. 0 = flat stop above.
+  atr_period: 14              # ATR lookback for the volatility-scaled stop
+  take_profit_pct: 20         # used only when take_profit_mode is 'hard'
+  take_profit_mode: trailing  # 'trailing' lets winners run; 'hard' caps at take_profit_pct
+  trailing_stop_pct: 20       # sell if price <= peak_since_entry * (1 - 0.20). Widened from 6: a 6%
+                              # trail exited every winner on a routine pullback (the main return leak).
+  max_hold_days: 180          # LIVE time-stop (calendar days): free capital from a position that
+                              # just drifts sideways past this with no price signal. Generous so it
+                              # only catches genuine dead money, not a winner mid-consolidation.
+  trend_break_fast: 20        # MA period; emits a 'watch' (advisory) signal only
+  trend_break_slow: 50        # MA period for the slow trend-break signal
+  trend_break_slow_level: watch  # 'watch' = advisory (trailing stop owns exits); 'sell' = closes the trade
   momentum_fade:
-    rsi_was_above: 70
-    volume_dry_ratio: 0.7
+    rsi_was_above: 70         # had been overbought...
+    volume_dry_ratio: 0.7     # ...and volume now < 0.7x its 20-day average
 backtest:
-  buy_threshold: 65
-  max_hold_days: 250
-  window_years: 2
-  cost_pct_per_side: 0.1
+  buy_threshold: 65           # simulate a buy when base score >= this
+  max_hold_days: 250          # generous cap (~1yr) so the trailing stop, not a clock, exits winners
+  window_years: 2             # how much history to replay (base backtest)
+  cost_pct_per_side: 0.1      # 0.2% round-trip slippage/commission
   baseline: equal_weight_watchlist
+  # Flat short-term-capital-gains haircut on WINNING trades, applied only by the ENRICHED
+  # backtest (run_enriched). This is the tax drag daily trading pays that buy-and-hold does
+  # not — the hurdle any active edge must clear. 0 = off (base backtest is unaffected).
+  stcg_tax_pct: 25
+  enriched_years: 4           # longer window for the enriched backtest, to span both the
+                              # 2022 drawdown and the 2023-24 rally (don't overfit one regime)

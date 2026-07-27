@@ -157,6 +157,35 @@ def test_load_positions_rejects_zero_entry_price(tmp_path):
         config.load_positions(cfg)
 
 
+def test_load_positions_skips_override_only_rows(tmp_path):
+    # positions.yaml doubles as an OVERRIDES file (entry_date / stop widths pinned per
+    # ticker on top of a live SnapTrade holding) and as the SnapTrade-failure FALLBACK.
+    # An override-only row has no entry_price and is not a position — raising on it would
+    # crash the whole briefing the moment a sync failed.
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    (cfg / "positions.yaml").write_text(
+        "positions:\n"
+        "  - ticker: GOOGL\n    entry_date: 2026-06-29\n"          # override only
+        "  - ticker: NVDA\n    entry_price: 120.5\n    shares: 3\n",  # real fallback position
+        encoding="utf-8")
+    out = config.load_positions(cfg)
+    assert [p["ticker"] for p in out] == ["NVDA"]
+    # ...and the same file still yields the override for the skipped ticker
+    assert config.load_position_overrides(cfg)["GOOGL"]["entry_date"] == "2026-06-29"
+
+
+def test_load_positions_still_rejects_a_malformed_real_position(tmp_path):
+    # Skipping override-only rows must not swallow a typo'd real one: a row with shares
+    # but no entry_price is a mistake, not an override.
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    (cfg / "positions.yaml").write_text(
+        "positions:\n  - ticker: NVDA\n    shares: 3\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        config.load_positions(cfg)
+
+
 def test_load_watchlist_named_loads_suffixed_file(tmp_path):
     (tmp_path / "watchlist_broad.yaml").write_text(
         "tickers:\n  - JNJ\n  - XOM\nsettings:\n  shortlist_size: 5\n", encoding="utf-8")

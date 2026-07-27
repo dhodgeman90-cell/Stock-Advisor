@@ -54,6 +54,58 @@ def test_drop_incomplete_removes_volume_only_trailing_bar():
     assert not pd.isna(cleaned["Close"].iloc[-1])
 
 
+# ---- partial (still-trading) bar ----------------------------------------
+# yfinance serves a live intraday bar for the CURRENT session with real OHLC and only
+# part of the day's volume. It passes the NaN check above, then indicators.volume_ratio
+# divides that part-day volume by a full-day 20-day average — and `volume` is 30 of the
+# 100 base points. Measured on 2026-07-27: the top-8 shortlist built from partial bars
+# overlapped the clean one by 1 of 8.
+
+def _et(y, m, d, hh, mm=0):
+    return dt.datetime(y, m, d, hh, mm, tzinfo=data.MARKET_TZ)
+
+
+def _df_ending(last_date, n=70):
+    idx = pd.date_range(end=pd.Timestamp(last_date), periods=n, freq="B")
+    return pd.DataFrame({"Open": 100.0, "High": 101.0, "Low": 99.0, "Close": 100.0,
+                         "Volume": 1_000_000}, index=idx)
+
+
+def test_drop_incomplete_removes_todays_bar_before_the_close():
+    df = _df_ending("2026-07-27")
+    cleaned = data._drop_incomplete(df, now=_et(2026, 7, 27, 8, 50))   # mid-session
+    assert len(cleaned) == len(df) - 1
+    assert cleaned.index[-1].date() == dt.date(2026, 7, 24)
+
+
+def test_drop_incomplete_keeps_todays_bar_after_the_close():
+    df = _df_ending("2026-07-27")
+    cleaned = data._drop_incomplete(df, now=_et(2026, 7, 27, 16, 30))  # post-close
+    assert len(cleaned) == len(df)
+    assert cleaned.index[-1].date() == dt.date(2026, 7, 27)
+
+
+def test_drop_incomplete_keeps_a_completed_prior_session():
+    df = _df_ending("2026-07-24")
+    cleaned = data._drop_incomplete(df, now=_et(2026, 7, 27, 8, 50))
+    assert len(cleaned) == len(df)   # yesterday's bar is final regardless of the clock
+
+
+def test_drop_incomplete_strips_every_trailing_incomplete_bar():
+    # A future-dated bar (clock skew / bad cache) must go too, not just today's.
+    df = _df_ending("2026-07-29")
+    cleaned = data._drop_incomplete(df, now=_et(2026, 7, 27, 8, 50))
+    assert cleaned.index[-1].date() == dt.date(2026, 7, 24)
+
+
+def test_load_cache_strips_a_cached_partial_bar(tmp_path):
+    # The 2026-07-27 08:50 run wrote partial bars into ~570 cache files. Reading one back
+    # must heal it, not re-ingest it.
+    data.save_cache(_df_ending("2026-07-27"), "PARTIAL", tmp_path)
+    cleaned = data.load_cache("PARTIAL", tmp_path, now=_et(2026, 7, 27, 8, 50))
+    assert cleaned.index[-1].date() == dt.date(2026, 7, 24)
+
+
 def test_validate_rejects_nan_last_close():
     # Backstop: even if a NaN trailing bar slips past _drop_incomplete, validate must
     # reject it rather than let close.iloc[-1] become NaN (the "price unavailable" bug).

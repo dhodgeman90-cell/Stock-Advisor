@@ -257,6 +257,7 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None,
     # Opt-in, default-off features (defaults keep the briefing byte-for-byte identical):
     entry_model = settings.get("entry_model", "legacy")            # "relative_strength" to enable
     regime_overlay = settings.get("regime_overlay", False)         # True = defensive in bear regimes
+    adds_paused = settings.get("adds_paused", False)               # True = withhold BUY calls
 
     data_dir = profile.data_dir
     reports_dir = profile.reports_dir
@@ -290,6 +291,7 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None,
         load_positions=lambda: config.load_positions(profile.config_dir),
         load_overrides=lambda: config.load_position_overrides(profile.config_dir),
         on_error=lambda e: print(f"[holdings: SnapTrade sync failed, using positions.yaml: {e}]"),
+        data_dir=data_dir, today=date_str,
     )
     exit_rules = objectives.apply_exit_rules(config.load_exit_rules(profile.config_dir), objective)
     df_by_ticker = {s["ticker"]: s.get("_df") for s in scored if s.get("_df") is not None}
@@ -514,6 +516,14 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None,
         effective_max_adds = 0
         print("[defensive mode: confirmed risk-off regime — recommending no new buys "
               "(reduces drawdown; does NOT beat the index in a bull market)]")
+    # Owner-set kill switch for the BUY side only. The ranking model has no measured edge
+    # (live +1d alpha is negative at every score band, and the scorecard is ~40x too small to
+    # detect a realistic one), so this withholds buy calls while keeping the sell side —
+    # exits/trims on open positions — fully live. Candidates are still scored and displayed.
+    if adds_paused:
+        effective_max_adds = 0
+        print("[adds paused: buy recommendations withheld pending validation — "
+              "exit/trim advice on open positions is unaffected]")
     rotation_plan = rotation.build_rotation_plan(
         holdings, ranked, conviction=exit_rules["backtest"]["buy_threshold"],
         max_adds=effective_max_adds,

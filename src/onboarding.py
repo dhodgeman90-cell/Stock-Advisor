@@ -12,12 +12,19 @@ import shutil
 
 from src import resources
 
+# Keep in sync with config/ — tests/test_onboarding.py asserts the seeded exit rules equal
+# the repo's. A packaged profile seeds from here ONCE and never re-syncs, so anything stale
+# in defaults/ becomes a permanent setting for every installed user. That is how the
+# pathological 5%/6% stops (and a missing max_hold_days, which resolves to 0 and disables
+# the live time-stop entirely) shipped while config/ carried the tuned 8%/20%.
 DEFAULT_FILES = [
     "watchlist.yaml",
     "weights.yaml",
     "adjudicator.yaml",
     "exits.yaml",
     "positions.yaml",
+    "signals.yaml",
+    "universe.txt",     # without this the installed app scans 10 names, not 586
 ]
 
 
