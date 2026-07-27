@@ -5,6 +5,10 @@ when no API key is set) using two cheap, broad reads: the VIX fear gauge and how
 S&P sector ETFs are green today. Both come from yfinance.
 """
 
+import pandas as pd
+
+from src import indicators
+
 # Standard SPDR sector ETFs — a quick read on how broad today's move is.
 SECTOR_ETFS = ["XLK", "XLF", "XLE", "XLV", "XLY", "XLP", "XLI", "XLU", "XLB", "XLRE", "XLC"]
 
@@ -129,3 +133,63 @@ def get_macro_context(fetch=_default_macro_fetch) -> dict:
         return _assess_macro(raw.get("curve"), raw.get("hy_spread"))
     except Exception:
         return dict(NEUTRAL_MACRO)
+
+
+# --- point-in-time regime series (Phase 1) ---------------------------------
+# The snapshot readers above answer "what's the regime TODAY?" for the live briefing.
+# The backtest instead needs "what was the regime as-of every PAST bar?" — computable
+# with no look-ahead and no per-bar network. regime_series does that from SPY alone;
+# apply_hysteresis smooths it so exposure doesn't whipsaw on a single red day.
+# ponytail: SPY-only MVP. A higher-fidelity regime_series_full (feeding as-of VIX +
+# sector breadth + yield-curve/HY into _summarize_breadth/_assess_macro, worst-of) is
+# deferred until Phase-2 validation shows the SPY-only signal is too crude to justify it.
+
+def regime_series(spy_df, *, fast=50, slow=200, dd_thresh=8.0):
+    """Per-date market regime {"risk_on","neutral","risk_off"} from SPY, as-of safe.
+
+    risk_off when price is below the slow MA AND drawdown-from-trailing-high exceeds
+    dd_thresh%; risk_on when price > fast MA > slow MA; neutral otherwise (including the
+    slow-MA warm-up, where we never cut exposure without a signal). Every value at bar i
+    uses only bars <= i (rolling means + cummax), so regime_series(spy[:k])[-1] equals
+    regime_series(spy)[k-1] — no future data leaks into a past decision."""
+    close = spy_df["Close"].astype(float)
+    sma_fast = indicators.sma(close, fast)
+    sma_slow = indicators.sma(close, slow)
+    drawdown = (close / close.cummax() - 1.0) * 100.0     # <= 0, percent below trailing high
+    out = []
+    for c, sf, ss, dd in zip(close, sma_fast, sma_slow, drawdown):
+        if pd.isna(ss):
+            out.append("neutral")                          # slow MA not warmed up -> no signal
+        elif c < ss and dd < -dd_thresh:
+            out.append("risk_off")
+        elif not pd.isna(sf) and c > sf > ss:
+            out.append("risk_on")
+        else:
+            out.append("neutral")
+    return pd.Series(out, index=close.index)
+
+
+def apply_hysteresis(raw, *, confirm_down=3, confirm_up=5):
+    """Smooth a raw regime Series into a two-state exposure stance {"risk_on","risk_off"}.
+
+    Starts risk_on (fully invested). Cuts to risk_off only after confirm_down consecutive
+    risk_off bars; restores to risk_on only after confirm_up consecutive non-risk_off bars
+    (neutral counts as non-risk_off). Re-entry is deliberately slower than exit. This is
+    what stops a single red day from flipping exposure — the whipsaw that makes naive
+    market-timing lose to buy-and-hold."""
+    out = []
+    state = "risk_on"
+    down = up = 0
+    for r in raw:
+        if r == "risk_off":
+            down += 1
+            up = 0
+        else:
+            up += 1
+            down = 0
+        if state != "risk_off" and down >= confirm_down:
+            state = "risk_off"
+        elif state == "risk_off" and up >= confirm_up:
+            state = "risk_on"
+        out.append(state)
+    return pd.Series(out, index=raw.index)
