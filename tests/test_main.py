@@ -222,12 +222,14 @@ def _buyable_df():
     return df
 
 
-def _offline_run(tmp_path, monkeypatch, extra_settings=""):
-    """Fully-offline main.run() over one strongly-rising ticker (scores well above 65)."""
+def _offline_run(tmp_path, monkeypatch, extra_settings="", universe=None):
+    """Fully-offline main.run() over strongly-rising tickers (each scores well above 65)."""
     cfg = tmp_path / "config"
     _seed_min_config(cfg)
+    tickers = universe or ["AAA"]
     (cfg / "watchlist.yaml").write_text(
-        "tickers:\n  - AAA\nsettings:\n  lookback_days: 120\n  shortlist_size: 2\n"
+        "tickers:\n" + "".join(f"  - {t}\n" for t in tickers)
+        + "settings:\n  lookback_days: 120\n  shortlist_size: 2\n"
         + extra_settings, encoding="utf-8")
     monkeypatch.setattr(main.social, "get_wsb_sentiment", lambda **kw: {})
     monkeypatch.setattr(main.congress, "get_congress_trades", lambda **kw: [])
@@ -252,6 +254,50 @@ def test_adds_paused_suppresses_every_buy_but_keeps_exit_advice(tmp_path, monkey
     assert res.rotation_plan["adds"] == []
     assert "adds" in res.rotation_plan and "exits" in res.rotation_plan
     assert res.ranked, "candidates are still scored and shown — only the BUY call is withheld"
+
+
+# ---- control cohort: unbiased signal capture ----
+
+def _cands(*tickers):
+    return [{"ticker": t, "score": 50.0} for t in tickers]
+
+
+def test_control_cohort_excludes_names_already_being_enriched():
+    out = main._control_cohort(_cands("A", "B", "C", "D", "E"), {"A", "B"}, 2, "2026-07-28")
+    assert len(out) == 2
+    assert {c["ticker"] for c in out}.isdisjoint({"A", "B"})
+
+
+def test_control_cohort_is_deterministic_for_a_given_date():
+    pool = _cands(*[f"T{i}" for i in range(40)])
+    a = main._control_cohort(pool, set(), 10, "2026-07-28")
+    b = main._control_cohort(pool, set(), 10, "2026-07-28")
+    c = main._control_cohort(pool, set(), 10, "2026-07-29")
+    assert [x["ticker"] for x in a] == [x["ticker"] for x in b]   # rerun same day = identical
+    assert [x["ticker"] for x in a] != [x["ticker"] for x in c]   # new day = new draw
+
+
+def test_control_cohort_handles_small_pools_and_being_disabled():
+    assert main._control_cohort(_cands("A", "B"), set(), 0, "2026-07-28") == []
+    assert len(main._control_cohort(_cands("A", "B"), set(), 99, "2026-07-28")) == 2
+    assert main._control_cohort([], set(), 5, "2026-07-28") == []
+
+
+def test_control_names_are_logged_but_never_reach_the_briefing(tmp_path, monkeypatch):
+    # A control name that leaked into ranked/others/rotation would become a recommendation
+    # the owner never asked for. This is the property that must not break.
+    from src import signal_log
+    res = _offline_run(tmp_path, monkeypatch, universe=[f"T{i}" for i in range(30)],
+                       extra_settings="  control_cohort_size: 5\n")
+    recs = signal_log.load_signals(tmp_path / "data")
+    control = {r["ticker"] for r in recs if r["cohort"] == "control"}
+    assert len(control) == 5, f"expected 5 control names, got {control}"
+
+    shown = ({r["ticker"] for r in res.ranked}
+             | {o["ticker"] for o in res.others}
+             | {a["ticker"] for a in res.rotation_plan.get("adds", [])})
+    assert control.isdisjoint(shown), f"control leaked into the briefing: {control & shown}"
+    assert control.isdisjoint(set(res.text.split()))
 
 
 def test_run_captures_point_in_time_signal_history(tmp_path, monkeypatch):

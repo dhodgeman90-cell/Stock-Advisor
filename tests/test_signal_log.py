@@ -65,6 +65,17 @@ def test_tolerates_a_half_written_line(tmp_path):
     assert signal_log.log_signals(_rows("NVDA"), tmp_path, "2026-07-29") == 1
 
 
+def test_records_are_tagged_with_their_cohort(tmp_path):
+    # The recommended set is chosen by a score measured at IC ~ 0, so it is a SKEWED
+    # cross-section (names at 20-day highs on volume spikes). Analysis has to be able to
+    # separate it from the unbiased control draw, or every signal correlated with
+    # breakout/volume comes back distorted.
+    signal_log.log_signals(_rows("AAPL"), tmp_path, "2026-07-28")
+    signal_log.log_signals(_rows("KO"), tmp_path, "2026-07-28", cohort="control")
+    by = {r["ticker"]: r["cohort"] for r in signal_log.load_signals(tmp_path)}
+    assert by == {"AAPL": "candidate", "KO": "control"}
+
+
 def test_unserializable_values_do_not_break_the_run(tmp_path):
     class Weird:
         pass

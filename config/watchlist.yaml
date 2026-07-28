@@ -15,6 +15,13 @@ settings:
   min_price: 5.0
   min_avg_volume: 500000        # legacy share-count floor (no longer used by scoring)
   min_dollar_volume: 10000000   # liquidity gate: $10M/day traded value (price x shares)
+  control_cohort_size: 15         # MEASUREMENT ONLY — never ranked, shown, or recommended.
+                                  # The enriched shortlist is picked by the legacy technical
+                                  # score, which is not random: it selects 20-day highs on
+                                  # volume spikes. Capturing signal history only there would
+                                  # let us ask "does analyst upside predict returns AMONG
+                                  # BREAKOUT NAMES" and nothing more. These 15 random eligible
+                                  # names are the unbiased comparison group. 0 disables.
   adds_paused: true               # withhold BUY calls pending validation. The sell side
                                   # (exits/trims on open positions) stays fully live, and
                                   # candidates are still scored and shown. Set false to resume.

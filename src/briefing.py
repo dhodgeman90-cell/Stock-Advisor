@@ -175,6 +175,27 @@ def _rate(v):
     return "n/a" if v is None else f"{v:.0f}%"
 
 
+def _underperf_flag(summary):
+    """Tri-state flag handed to verdict.classify: True / False / None.
+
+    `None` means we HAVE a mature sample but could not compute alpha (the SPY fetch failed).
+    A plain `bool()` here would flatten that to False and let a data outage read as a clean
+    bill of health, promoting every pick to medium/high confidence. Below the sample floor we
+    keep the existing False — that path is already gated by `enough` and shows no numbers.
+    """
+    if not (summary and summary.get("enough")):
+        return False
+    return summary.get("underperforming")
+
+
+def _verdict_phrase(under) -> str:
+    """Tri-state verdict wording. `None` means the benchmark comparison could not be computed
+    (e.g. the SPY fetch failed) — it must read as UNKNOWN, never as 'beating SPY'."""
+    if under is None:
+        return "of unknown standing vs SPY (benchmark unavailable)"
+    return "underperforming SPY" if under else "beating SPY"
+
+
 def render_reality_check(summary) -> str:
     """Markdown 'Reality check' block: how the app's OWN past picks are doing vs SPY, shown
     at the decision moment so the reader can't act on today's list without seeing the record.
@@ -186,7 +207,7 @@ def render_reality_check(summary) -> str:
         L.append(f"_{summary.get('n_matured', 0)} matured picks logged — too few to judge yet "
                  "(building toward 30+). Numbers withheld until the sample is meaningful._")
         return "\n".join(L)
-    verdict = "underperforming SPY" if summary["underperforming"] else "beating SPY"
+    verdict = _verdict_phrase(summary["underperforming"])
     L.append(f"This system's own picks are currently **{verdict}**. Read this before acting "
              "on today's list.")
     L.append(f"- +5d vs SPY (actionable cohort): {_pct(summary['cohort_alpha_5d'])} alpha · "
@@ -206,8 +227,10 @@ def _reality_check_html(summary, e) -> str:
                 f'🧭 <b>Reality check:</b> {summary.get("n_matured", 0)} matured picks — too few '
                 'to judge yet (building toward 30+).</div>')
     under = summary["underperforming"]
-    bg, fg = ("#fef2f2", "#7f1d1d") if under else ("#ecfdf5", "#065f46")
-    verdict = "underperforming SPY" if under else "beating SPY"
+    # unknown gets the neutral grey treatment — never the green "all good" panel
+    bg, fg = (("#f3f4f6", "#374151") if under is None
+              else ("#fef2f2", "#7f1d1d") if under else ("#ecfdf5", "#065f46"))
+    verdict = _verdict_phrase(under)
     return (f'<div style="background:{bg};border-radius:8px;padding:11px 13px;margin-bottom:14px;'
             f'font-size:12.5px;color:{fg};">'
             f'🧭 <b>Reality check:</b> this system\'s own picks are currently <b>{verdict}</b>. '
@@ -236,8 +259,7 @@ def render_briefing(ranked, vetoed, others, excluded, date_str, regime, regime_n
     optional one-line strategy framing (set by the active objective preset). Each candidate
     leads with a single Buy/Watch/Avoid verdict; the raw signal detail is demoted below it.
     """
-    underperforming = bool(scorecard_summary and scorecard_summary.get("enough")
-                           and scorecard_summary.get("underperforming"))
+    underperforming = _underperf_flag(scorecard_summary)
     L = [
         f"# Stock Advisor — {date_str}",
         "",
@@ -440,8 +462,7 @@ def render_briefing_html(ranked, vetoed, others, excluded, date_str, regime,
     """Styled HTML version of the daily briefing (plain-text fallback stays render_briefing)."""
     e = html.escape
     green = "#0f3d2e"
-    underperforming = bool(scorecard_summary and scorecard_summary.get("enough")
-                           and scorecard_summary.get("underperforming"))
+    underperforming = _underperf_flag(scorecard_summary)
     tone_html = (f'<div style="font-size:11.5px;color:#cdeede;margin-top:4px;'
                  f'font-style:italic;">{e(tone_line)}</div>') if tone_line else ""
     P = [
