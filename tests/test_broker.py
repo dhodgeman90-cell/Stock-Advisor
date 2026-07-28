@@ -186,6 +186,127 @@ def test_entry_date_stamping_is_skipped_without_a_data_dir():
     assert out[0]["entry_date"] == ""   # no store to write to -> unchanged, never crashes
 
 
+# ---- deriving the TRUE entry date from brokerage activity ------------------
+# first-seen only knows when the app first noticed a position. SnapTrade's activity feed has
+# the actual fills, so the open date can be derived exactly and retroactively. The rule a
+# position-level trailing stop needs: the date the running share count last crossed 0 -> >0.
+# Adds and partial sells must NOT reset it; a full exit followed by a re-buy MUST.
+
+def _act(date, ticker, units, kind=None):
+    # ACTIVITY rows nest the symbol one level shallower than POSITION rows: symbol.symbol is
+    # the ticker string itself, not another dict. Live data hit this immediately.
+    return {"trade_date": f"{date}T00:00:00Z",
+            "type": kind or ("BUY" if units > 0 else "SELL"),
+            "units": units, "symbol": {"symbol": ticker, "raw_symbol": ticker}}
+
+
+def test_extract_ticker_handles_both_position_and_activity_shapes():
+    assert broker._extract_ticker({"symbol": {"symbol": {"symbol": "aapl"}}}) == "AAPL"  # position
+    assert broker._extract_ticker({"symbol": {"symbol": "qure"}}) == "QURE"              # activity
+    assert broker._extract_ticker({"symbol": {"raw_symbol": "jpm"}}) == "JPM"
+    assert broker._extract_ticker({"symbol": {}}) is None
+    assert broker._extract_ticker({}) is None
+
+
+def test_derive_open_date_for_a_simple_single_buy():
+    assert broker._derive_open_dates([_act("2026-07-22", "JPM", 0.065)]) == {"JPM": "2026-07-22"}
+
+
+def test_adding_to_a_position_does_not_reset_the_open_date():
+    # This is exactly QURE: opened 2025-12-05, added twice in June. The June dates are adds,
+    # not the open — pinning one of them hid a 234-day time_exit.
+    out = broker._derive_open_dates([
+        _act("2025-12-05", "QURE", 1.00),
+        _act("2026-06-11", "QURE", 0.33),
+        _act("2026-06-17", "QURE", 0.47),
+    ])
+    assert out == {"QURE": "2025-12-05"}
+
+
+def test_partial_sell_does_not_reset_the_open_date():
+    out = broker._derive_open_dates([
+        _act("2026-01-05", "AAA", 10.0),
+        _act("2026-03-01", "AAA", -4.0),
+    ])
+    assert out == {"AAA": "2026-01-05"}
+
+
+def test_full_exit_then_rebuy_restarts_the_clock():
+    out = broker._derive_open_dates([
+        _act("2026-01-05", "AAA", 10.0),
+        _act("2026-03-01", "AAA", -10.0),     # flat
+        _act("2026-06-01", "AAA", 5.0),       # new position
+    ])
+    assert out == {"AAA": "2026-06-01"}
+
+
+def test_rows_are_sorted_before_walking():
+    out = broker._derive_open_dates([
+        _act("2026-06-17", "QURE", 0.47),     # deliberately out of order
+        _act("2025-12-05", "QURE", 1.00),
+        _act("2026-06-11", "QURE", 0.33),
+    ])
+    assert out == {"QURE": "2025-12-05"}
+
+
+def test_a_fully_closed_position_yields_no_open_date():
+    out = broker._derive_open_dates([
+        _act("2026-01-05", "AAA", 10.0), _act("2026-03-01", "AAA", -10.0)])
+    assert "AAA" not in out
+
+
+def test_non_trade_activity_and_junk_rows_are_ignored():
+    out = broker._derive_open_dates([
+        _act("2026-01-01", "AAA", 1.0, kind="DIVIDEND"),
+        {"trade_date": None, "type": "BUY", "units": 1, "symbol": {}},
+        {"type": "BUY"},                                   # no date, no symbol
+        _act("2026-02-02", "AAA", 3.0),
+    ])
+    assert out == {"AAA": "2026-02-02"}
+
+
+def test_float_dust_does_not_count_as_still_holding():
+    # brokers leave rounding crumbs; 1e-12 shares is flat, and the re-buy must restart.
+    out = broker._derive_open_dates([
+        _act("2026-01-05", "AAA", 1.0),
+        _act("2026-02-05", "AAA", -0.999999999999),
+        _act("2026-06-01", "AAA", 2.0),
+    ])
+    assert out == {"AAA": "2026-06-01"}
+
+
+def test_derived_date_beats_first_seen_but_loses_to_a_manual_pin(tmp_path):
+    live = _live("QURE", "JPM")
+    out = {p["ticker"]: p for p in broker.resolve_positions(
+        configured=lambda: True, fetch=lambda: live,
+        fetch_entry_dates=lambda: {"QURE": "2025-12-05", "JPM": "2026-07-22"},
+        load_overrides=lambda: {"JPM": {"entry_date": "2020-01-01"}},
+        data_dir=tmp_path, today="2026-07-28",
+    )}
+    assert out["QURE"]["entry_date"] == "2025-12-05"   # derived beats first-seen (today)
+    assert out["JPM"]["entry_date"] == "2020-01-01"    # explicit pin still wins
+
+
+def test_falls_back_to_first_seen_when_activities_are_unavailable(tmp_path):
+    # Coverage limit is real: activity history only reaches ~2025-11-13 on this account, so a
+    # position opened before that has no derived date. It must fall through, never fabricate.
+    def boom():
+        raise RuntimeError("410 Gone")
+    out = broker.resolve_positions(
+        configured=lambda: True, fetch=lambda: _live("OLD"),
+        fetch_entry_dates=boom, data_dir=tmp_path, today="2026-07-28")
+    assert out[0]["entry_date"] == "2026-07-28"        # first-seen stamp, not a guess
+
+
+def test_ticker_missing_from_activities_falls_back_to_first_seen(tmp_path):
+    out = broker.resolve_positions(
+        configured=lambda: True, fetch=lambda: _live("OLD", "NEW"),
+        fetch_entry_dates=lambda: {"NEW": "2026-07-01"},
+        data_dir=tmp_path, today="2026-07-28")
+    by = {p["ticker"]: p["entry_date"] for p in out}
+    assert by == {"NEW": "2026-07-01", "OLD": "2026-07-28"}
+
+
 def test_unreadable_first_seen_store_does_not_break_the_sync(tmp_path):
     (tmp_path / "position_first_seen.json").write_text("{ not json", encoding="utf-8")
     out = broker.resolve_positions(configured=lambda: True, fetch=lambda: _live("NVDA"),

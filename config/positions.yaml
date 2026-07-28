@@ -12,15 +12,13 @@
 #     take_profit_pct: 25
 #     trailing_stop_pct: 12
 #     entry_date: 2026-06-01
-# Real purchase dates, supplied by the owner 2026-07-27. SnapTrade does not return a
-# purchase date, so without these the trailing stop would track the peak only from the day
-# the first-seen store was created (2026-07-27) and would not protect gains already banked.
-positions:
-  - ticker: QURE
-    entry_date: 2026-06-17
-  - ticker: GOOGL
-    entry_date: 2026-06-29
-  - ticker: AMZN
-    entry_date: 2026-07-07
-  - ticker: JPM
-    entry_date: 2026-07-22
+# Manual entry_date pins are no longer needed: broker.fetch_entry_dates derives the true
+# position-open date from the brokerage activity feed (see src/broker.py). The pins that were
+# briefly here on 2026-07-27 have been removed — one of them was WRONG in a way that hid an
+# exit. QURE was pinned to 2026-06-17, which was the last ADD to the position; it actually
+# opened 2025-12-05, and the correct date fires a time_exit (234 days held vs a 180-day max)
+# that the pinned date suppressed. Derived dates are exact and need no maintenance.
+#
+# Still use this file to OVERRIDE a derived value (it wins over everything) or to pin exit
+# widths per ticker.
+positions: []
