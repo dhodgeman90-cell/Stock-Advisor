@@ -2,6 +2,28 @@ from src import picks
 from tests.helpers import make_df
 
 
+# ---- one pick = one row, regardless of how it got logged --------------------
+# picks._key used to include `source`, so backfill_from_reports re-ingested picks the live
+# run had already written, as source="report". Result: 448 rows for 280 real picks — 168
+# duplicates, ~37% inflation of every count and every average the scorecard reports, and the
+# reality-check banner tripping its min_matured gate at half the true sample.
+
+def test_a_pick_is_not_relogged_under_a_different_source(tmp_path):
+    df = {"AAA": make_df([10.0] * 60)}
+    assert picks.log_picks(_ranked()[:1], df, tmp_path, "2026-07-28") == 1
+    assert picks.log_picks(_ranked()[:1], df, tmp_path, "2026-07-28", source="report") == 0
+    recs = picks.load_picks(tmp_path)
+    assert len(recs) == 1
+    assert recs[0]["source"] == "briefing"     # the richer live record is the one kept
+
+
+def test_same_ticker_on_a_different_date_is_still_a_new_pick(tmp_path):
+    df = {"AAA": make_df([10.0] * 60)}
+    picks.log_picks(_ranked()[:1], df, tmp_path, "2026-07-28")
+    assert picks.log_picks(_ranked()[:1], df, tmp_path, "2026-07-29") == 1
+    assert len(picks.load_picks(tmp_path)) == 2
+
+
 def _ranked():
     return [
         {"ticker": "AAA", "final_score": 88.0, "base_score": 70.0,

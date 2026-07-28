@@ -117,18 +117,27 @@ def _pos_on_or_after(df, when) -> int | None:
     return pos if pos < len(df) else None
 
 
-def forward_return(df, entry_pos, horizon) -> float | None:
+def forward_return(df, entry_pos, horizon, *, price="Close") -> float | None:
     """% change from the entry bar to `horizon` bars later, both from the same series.
-    None when the entry is invalid or the horizon bar doesn't exist yet (immature)."""
+    None when the entry is invalid or the horizon bar doesn't exist yet (immature).
+
+    `price="Open"` measures the window the reader can actually TRADE. The briefing is written
+    pre-open on day D from day D-1's completed bar, so D's open is the first obtainable price;
+    close-to-close silently credits the strategy with D's entire open->close move. On the live
+    ledger the two conventions differed by 0.4%/day — more than the whole measured effect —
+    so this is a correctness issue, not a refinement. Falls back to Close if the frame has no
+    Open column (older cached CSVs).
+    """
     if df is None or entry_pos is None:
         return None
     j = entry_pos + horizon
     if j < 0 or j >= len(df):
         return None
-    entry = float(df["Close"].iloc[entry_pos])
+    col = price if price in df.columns else "Close"
+    entry = float(df[col].iloc[entry_pos])
     if entry <= 0:
         return None
-    return (float(df["Close"].iloc[j]) / entry - 1.0) * 100.0
+    return (float(df[col].iloc[j]) / entry - 1.0) * 100.0
 
 
 def to_date_return(df, entry_pos) -> float | None:
@@ -635,7 +644,11 @@ def summary_from_graded(graded, buy_threshold, n_picks, *, min_matured=30) -> di
         "beat_spy_rate": cohort.get("beat_spy_rate"),
         "sim_expectancy": sim["expectancy"],
         "sim_win": sim["win_rate"],
-        "underperforming": (alpha is not None and alpha < 0),
+        # TRI-STATE: True / False / None. This was `alpha is not None and alpha < 0`, which
+        # collapsed "could not measure" into "not underperforming" — so a SPY fetch failure
+        # made the briefing announce "beating SPY" while simultaneously lifting verdict.py's
+        # low-confidence cap on every pick. A missing measurement is not good news.
+        "underperforming": (None if alpha is None else alpha < 0),
     }
 
 

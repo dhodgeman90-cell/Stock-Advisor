@@ -1,7 +1,45 @@
 import pandas as pd
+import pytest
 
 from src import picks, scorecard
 from tests.helpers import make_df
+
+
+def _oc_frame(opens, closes):
+    """OHLCV frame with explicitly different opens and closes (make_df sets them equal)."""
+    idx = pd.date_range("2026-01-01", periods=len(opens), freq="B")
+    return pd.DataFrame({"Open": opens, "High": closes, "Low": opens,
+                         "Close": closes, "Volume": [1_000_000] * len(opens)}, index=idx)
+
+
+# ---- grade the window you can actually trade -------------------------------
+# The briefing is written pre-open on day D from day D-1's completed bar, so the first price
+# the reader can transact at is D's OPEN. Grading close-to-close silently hands the strategy
+# day D's whole open->close move for free. Measured on the live ledger, that convention was
+# the difference between -0.73%/day and -0.33%/day — worth more than the entire effect.
+
+def test_forward_return_open_mode_uses_opens_not_closes():
+    df = _oc_frame(opens=[10.0, 20.0, 40.0], closes=[15.0, 30.0, 60.0])
+    assert scorecard.forward_return(df, 0, 1, price="Open") == pytest.approx(100.0)  # 10 -> 20
+    assert scorecard.forward_return(df, 0, 1) == pytest.approx(100.0)                # 15 -> 30
+
+
+def test_open_and_close_modes_diverge_across_an_overnight_gap():
+    # entry bar closes at 15, next bar OPENS at 30 — a gap the pre-open reader cannot capture.
+    df = _oc_frame(opens=[10.0, 30.0], closes=[15.0, 33.0])
+    assert scorecard.forward_return(df, 0, 1) == pytest.approx(120.0)                # close->close
+    assert scorecard.forward_return(df, 0, 1, price="Open") == pytest.approx(200.0)  # open->open
+
+
+def test_forward_return_open_mode_still_returns_none_when_immature():
+    df = _oc_frame(opens=[10.0, 20.0], closes=[15.0, 30.0])
+    assert scorecard.forward_return(df, 0, 5, price="Open") is None
+
+
+def test_forward_return_open_mode_falls_back_when_open_is_missing():
+    df = make_df([10.0, 11.0, 12.0])          # helper frames have Open == Close
+    del df["Open"]
+    assert scorecard.forward_return(df, 0, 1, price="Open") == pytest.approx(10.0)
 
 # A saved-briefing sample in the real format (briefing.render_briefing), with both a
 # "## Top candidates" section and the differently-formatted "## Other scored" section.

@@ -99,8 +99,13 @@ def classify(r: dict, buy_threshold: float = 65, *, underperforming: bool = Fals
 def _confidence(score, buy_threshold, n_signals, underperforming, contradiction) -> str:
     """Coarse confidence tag. Deliberately conservative: the system's own scorecard forces
     every call down to 'low' when it is underperforming its benchmark, so the briefing never
-    projects false conviction on a record that hasn't earned it."""
-    if underperforming or contradiction:
+    projects false conviction on a record that hasn't earned it.
+
+    `underperforming` is TRI-STATE: True / False / None, where None means the benchmark
+    comparison could not be computed (e.g. the SPY fetch failed). That is an absence of
+    evidence, not evidence of absence, so it caps confidence too — otherwise a data outage
+    silently promotes every pick to medium/high."""
+    if underperforming is None or underperforming or contradiction:
         return "low"
     if score >= buy_threshold + 10 and n_signals >= 2:
         return "high"

@@ -45,12 +45,20 @@ def _key(rec: dict) -> tuple:
     return (rec.get("date"), rec.get("ticker"))
 
 
-def log_signals(cand_rows, data_dir, date_str, *, context=None) -> int:
+def log_signals(cand_rows, data_dir, date_str, *, context=None, cohort="candidate") -> int:
     """Append one record per enriched candidate. Returns the number written.
 
     `cand_rows` is main.run's list of (scored_row, signals, projected_score). `context` is the
     once-a-day market state (regime, breadth, macro) copied onto every row so a later study can
     condition on it without a second join.
+
+    `cohort` separates the two samples, and the distinction is the whole point:
+      "candidate" — the enriched shortlist, chosen by the legacy technical score. That score
+                    measures IC ~ 0 but is not RANDOM: it selects names at 20-day highs on
+                    volume spikes. Anything correlated with breakout or volume is distorted here.
+      "control"   — a deterministic random draw from the eligible universe, never recommended
+                    and never displayed. The unbiased comparison group that makes cross-sectional
+                    inference possible at all.
     """
     existing = {_key(r) for r in load_signals(data_dir)}
     lines = []
@@ -63,6 +71,7 @@ def log_signals(cand_rows, data_dir, date_str, *, context=None) -> int:
             "projected_score": projected,
             "signals": sigs,
             "context": context or {},
+            "cohort": cohort,
         }
         k = _key(rec)
         if k in existing:

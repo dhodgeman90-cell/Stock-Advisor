@@ -38,7 +38,17 @@ def load_picks(data_dir) -> list[dict]:
 
 
 def _key(rec: dict) -> tuple:
-    return (rec.get("date"), rec.get("ticker"), rec.get("source", "briefing"))
+    """Identity of a pick: one ticker, one date, one row.
+
+    `source` used to be part of this key, which meant backfill_from_reports re-ingested picks
+    the live run had already logged, as source="report". The ledger reached 448 rows for 280
+    real picks — 168 duplicates — inflating every count and average the scorecard reports by
+    ~37%, and tripping the min_matured disclosure gate at half the true sample. The live
+    "briefing" record is written first and is strictly richer (it carries base_score,
+    entry_close and the fired-signal list, which a regex over a rendered .md cannot recover),
+    so first-write-wins is also keep-the-better-record.
+    """
+    return (rec.get("date"), rec.get("ticker"))
 
 
 def _entry_close(df):

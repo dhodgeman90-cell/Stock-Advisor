@@ -1,5 +1,6 @@
 import datetime as dt
 import os
+import random
 from pathlib import Path
 
 import pandas as pd
@@ -163,6 +164,27 @@ def _ai_is_actionable(holdings, projected_scores, buy_threshold) -> bool:
     if any(h.get("signals") for h in holdings):
         return True
     return any(score >= buy_threshold for score in projected_scores)
+
+
+def _control_cohort(cands, exclude, size, date_str) -> list:
+    """A deterministic random draw of eligible names to enrich purely for MEASUREMENT.
+
+    The enriched shortlist is chosen by the legacy technical score, which measures a rank IC
+    of ~0 but is emphatically not random: it selects names at 20-day highs on volume spikes.
+    Capturing signal history only there means analyst/options/short-interest/EDGAR values are
+    only ever observed on breakout names, so any signal correlated with breakout or volume
+    comes back distorted. This draw is the unbiased comparison group that makes cross-sectional
+    inference possible at all.
+
+    Seeded on the date so a same-day rerun reproduces the same cohort — the briefing must stay
+    reproducible. These names are logged and NEVER ranked, displayed, or recommended.
+    """
+    if size <= 0:
+        return []
+    pool = [s for s in cands if s["ticker"] not in exclude]
+    if not pool:
+        return []
+    return random.Random(date_str).sample(pool, min(int(size), len(pool)))
 
 
 def _has_priority_signal(ticker, congress_agg, wsb_map, min_mentions) -> bool:
@@ -363,8 +385,14 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None,
         if _has_priority_signal(s["ticker"], congress_agg, wsb_map, min_mentions):
             shortlist.append(s)
             enriched_names.add(s["ticker"])
+    # Measurement-only draw. Enriched and logged like a candidate, but deliberately kept out of
+    # `shortlist` so it can never be ranked, displayed, or recommended — see _control_cohort.
+    control = _control_cohort(cands, enriched_names,
+                              settings.get("control_cohort_size", 0), date_str)
+    control_names = {s["ticker"] for s in control}
     others = [{"ticker": s["ticker"], "score": s["score"]}
-              for s in cands if s["ticker"] not in enriched_names]
+              for s in cands
+              if s["ticker"] not in enriched_names and s["ticker"] not in control_names]
     excluded = [{"ticker": s["ticker"], "reason": s["reason"]}
                 for s in scored if s["excluded"]]
 
@@ -385,22 +413,26 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None,
     # I/O-bound; fetchpool overlaps them so the run stays inside the time budget), then a
     # neutral-AI projection (pure; spends no tokens).
     enriched = fetchpool.fetch_map(
-        [s["ticker"] for s in shortlist],
+        [s["ticker"] for s in shortlist] + [s["ticker"] for s in control],
         lambda t: _enrich_candidate(t, cik_map, sec_window),
         default=_neutral_bundle,
         timeout=ENRICH_TIMEOUT_S,
     )
-    cand_rows = []   # (scored_row, signals, projected_score)
-    for s in shortlist:
-        ticker = s["ticker"]
+
+    def _sig_bundle(ticker):
         e = enriched.get(ticker) or _neutral_bundle()
-        sigs = {
+        return {
             "congress": congress_agg.get(ticker),
             "wsb": wsb_map.get(ticker),
             "analyst": e["analyst"], "insider": e["insider"], "earnings": e["earnings"],
             "short": e["short"], "revision": e["revision"],
             "edgar": e["edgar"], "options": e["options"],
         }
+
+    cand_rows = []   # (scored_row, signals, projected_score)
+    for s in shortlist:
+        ticker = s["ticker"]
+        sigs = _sig_bundle(ticker)
         projected = _projected_score(
             s["score"], det_context, caps,
             congress=sigs["congress"], wsb=sigs["wsb"], analyst=sigs["analyst"],
@@ -416,11 +448,13 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None,
     # the only way those signals will ever become backtestable. Guarded like the pick ledger:
     # a logging failure must never break the briefing.
     try:
-        signal_log.log_signals(cand_rows, data_dir, date_str, context={
-            "regime": combined_regime,
-            "breadth": breadth.get("regime"),
-            "macro": macro.get("macro_regime"),
-        })
+        ctx = {"regime": combined_regime, "breadth": breadth.get("regime"),
+               "macro": macro.get("macro_regime")}
+        signal_log.log_signals(cand_rows, data_dir, date_str, context=ctx)
+        # The unbiased comparison group. Without it the captured history only ever describes
+        # breakout names, and no honest cross-sectional inference is possible from it.
+        signal_log.log_signals([(s, _sig_bundle(s["ticker"]), None) for s in control],
+                               data_dir, date_str, context=ctx, cohort="control")
     except Exception as e:
         print(f"[signal history log failed: {e}]")
 

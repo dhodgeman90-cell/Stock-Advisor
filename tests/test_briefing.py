@@ -73,6 +73,33 @@ def test_reality_check_says_beating_when_positive_alpha():
     assert "beating SPY" in out
 
 
+def test_reality_check_says_unknown_when_alpha_could_not_be_measured():
+    # `underperforming` was `alpha is not None and alpha < 0`, so a SPY fetch failure ->
+    # alpha None -> flag False -> the banner announced "beating SPY" during a data outage,
+    # and verdict._confidence lifted the low-confidence cap on every pick at the same time.
+    # Absence of a measurement must never render as good news.
+    out = briefing.render_reality_check(_sc(cohort_alpha_5d=None, underperforming=None))
+    assert "beating SPY" not in out
+    assert "unknown" in out.lower()
+
+
+def test_scorecard_summary_marks_unmeasurable_alpha_as_none():
+    # No gradeable alpha (e.g. the SPY fetch failed) must surface as None, not as False.
+    from src import scorecard
+    s = scorecard.summary_from_graded([], 65, 0, min_matured=0)
+    assert s["cohort_alpha_5d"] is None
+    assert s["underperforming"] is None
+
+
+def test_confidence_stays_low_when_performance_is_unknown():
+    from src import verdict
+    r = {"ticker": "AAA", "final_score": 90.0, "vetoed": False,
+         "adjustment_detail": [{"key": "catalyst", "points": 15},
+                               {"key": "analyst_bull", "points": 8}]}
+    v = verdict.classify(r, 65, underperforming=None)
+    assert v["confidence"] == "low"      # unknown is not permission to project conviction
+
+
 def test_reality_check_withholds_numbers_below_sample_floor():
     out = briefing.render_reality_check(_sc(n_matured=8, enough=False))
     assert "too few to judge" in out
