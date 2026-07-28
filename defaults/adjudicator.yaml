@@ -11,8 +11,20 @@ caps:
   analyst: 8          # +/- points from analyst consensus / price-target upside
   earnings_soon: 6    # -points for a new entry with earnings inside the window
   social: 10          # MAX social impact; actually applied = social * trust(0..1)
-  edgar_catalyst: 15  # +/- points from a material 8-K (primary-source catalyst)
-  activist_stake: 12  # +points when an activist 13D stake is filed
+  # --- set by the 2026-07-27 EDGAR event study (docs/results-8k-event-study.md) ---
+  edgar_catalyst: 0   # WAS 15. Failed its pre-registered test: at the primary +21d horizon the
+                      # spread is -0.445% (t=-2.87), i.e. the point estimate runs OPPOSITE the
+                      # +15 this cap assumed, in 5 of 6 years. It also fires on 49.6% of eligible
+                      # name-days (8-K item 2.02 is quarterly for nearly every issuer), so it was
+                      # a near-constant that could not change relative ranking anyway. NOT flipped
+                      # to -15: a negative effect is a new hypothesis needing its own
+                      # out-of-sample test on the quarantined 2019-2021 window. The 8-K text
+                      # still appears in the briefing as explanation.
+  activist_stake: 6   # WAS 12. Halved, not zeroed: +63d +3.298% with the predicted sign and 4/6
+                      # year consistency, but t=+2.23 is below the pre-registered 2.75 bar on
+                      # n=19. Underpowered rather than refuted — 13D filings are rare (2.1% of
+                      # name-days), which is both why it may carry information and why it is hard
+                      # to test. Revisit when the sample grows.
   options_flow: 8     # +/- points from unusual call/put option flow
   short_squeeze: 10   # +/- points: squeeze setup (corroborated) vs crowded short
   estimate_revision: 5  # +/- points from analyst estimate-revision momentum
