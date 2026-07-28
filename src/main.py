@@ -6,7 +6,8 @@ import pandas as pd
 
 from src import (config, data, scoring, news, agents, adjudicator, briefing,
                  exits, broker, social, congress, insights, market, rotation,
-                 objectives, onboarding, edgar, options, fetchpool, picks, scorecard)
+                 objectives, onboarding, edgar, options, fetchpool, picks, scorecard,
+                 signal_log)
 from src.profile import Profile
 from src.results import RunResult
 
@@ -408,6 +409,20 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None,
             revision=sigs["revision"],
         )
         cand_rows.append((s, sigs, projected))
+
+    # Point-in-time capture of every raw signal value, for the whole enriched shortlist (~25),
+    # BEFORE any AI/adjudication narrows it. Analyst, options, short interest, WSB and congress
+    # exist only as present-day snapshots — no free source sells their history — so this file is
+    # the only way those signals will ever become backtestable. Guarded like the pick ledger:
+    # a logging failure must never break the briefing.
+    try:
+        signal_log.log_signals(cand_rows, data_dir, date_str, context={
+            "regime": combined_regime,
+            "breadth": breadth.get("regime"),
+            "macro": macro.get("macro_regime"),
+        })
+    except Exception as e:
+        print(f"[signal history log failed: {e}]")
 
     holdings_actionable = any(h.get("signals") for h in holdings)
     has_llm = bool(secrets.get("ANTHROPIC_API_KEY"))

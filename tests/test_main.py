@@ -254,6 +254,29 @@ def test_adds_paused_suppresses_every_buy_but_keeps_exit_advice(tmp_path, monkey
     assert res.ranked, "candidates are still scored and shown — only the BUY call is withheld"
 
 
+def test_run_captures_point_in_time_signal_history(tmp_path, monkeypatch):
+    # The only route by which snapshot-only signals (analyst, options, short interest, WSB,
+    # congress) ever become backtestable. Must cover the ENRICHED shortlist, not just the
+    # displayed top-8, and must survive a run with no AI and no network feeds.
+    from src import signal_log
+    res = _offline_run(tmp_path, monkeypatch)
+    recs = signal_log.load_signals(tmp_path / "data")
+    assert recs, "no signal history written"
+    r = recs[0]
+    assert r["date"] == res.date and r["ticker"] == "AAA"
+    assert "analyst" in r["signals"] and "edgar" in r["signals"] and "options" in r["signals"]
+    assert r["context"]["regime"] in ("risk_on", "neutral", "risk_off")
+    assert r["base_score"] is not None
+
+
+def test_signal_history_is_not_duplicated_on_a_same_day_rerun(tmp_path, monkeypatch):
+    from src import signal_log
+    _offline_run(tmp_path, monkeypatch)
+    n1 = len(signal_log.load_signals(tmp_path / "data"))
+    _offline_run(tmp_path, monkeypatch)                      # same date, second run
+    assert len(signal_log.load_signals(tmp_path / "data")) == n1
+
+
 def test_adds_are_recommended_when_not_paused(tmp_path, monkeypatch):
     # Guard the guard: without the flag the same run DOES produce an add, so the test
     # above proves the flag works rather than that the fixture never adds anything.
