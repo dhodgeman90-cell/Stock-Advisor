@@ -1,0 +1,32 @@
+name: CI
+
+# Runs on every push to main and on every pull request. This is the whole point:
+# the 570 tests stop being something you have to remember to run.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # Matches the local dev environment (3.14.4) so CI reflects reality.
+          python-version: '3.14'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Safe to run on Linux: conftest.py installs a FakeKeyring via an
+      # autouse fixture, so no test ever touches a real OS credential store.
+      - name: Run tests
+        run: pytest -q
