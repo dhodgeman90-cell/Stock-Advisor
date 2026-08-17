@@ -103,6 +103,108 @@ def test_render_enriched_report_states_verdict_and_disclaimer():
     assert "measured edge (partial)" in beat
 
 
+# ---- average market exposure (% of trading bars invested) ----
+
+def test_average_exposure_is_mean_time_in_market_across_names():
+    # MIN_HISTORY warm-up bars can't hold a position, so usable = len(df) - MIN_HISTORY.
+    hist = {"A": make_df([100.0] * (backtest.MIN_HISTORY + 100)),   # usable 100 bars
+            "B": make_df([100.0] * (backtest.MIN_HISTORY + 50))}    # usable 50 bars
+    trades = [{"ticker": "A", "hold_days": 30}, {"ticker": "A", "hold_days": 20},  # 50/100 = 50%
+              {"ticker": "B", "hold_days": 10}]                                    # 10/50  = 20%
+    assert round(backtest.average_exposure(hist, trades), 1) == 35.0   # mean(50%, 20%)
+
+
+def test_average_exposure_counts_a_never_held_name_as_zero():
+    hist = {"A": make_df([100.0] * (backtest.MIN_HISTORY + 100)),
+            "B": make_df([100.0] * (backtest.MIN_HISTORY + 100))}    # usable 100 each
+    trades = [{"ticker": "A", "hold_days": 50}]                      # A 50%, B never held -> 0%
+    assert round(backtest.average_exposure(hist, trades), 1) == 25.0   # mean(50%, 0%)
+
+
+def test_enriched_core_reports_exposure_per_preset():
+    core = backtest.enriched_backtest_core({"T": make_df([100.0] * 70)}, {"T": {}}, WEIGHTS,
+                                           FULL_RULES, SETTINGS, CAPS, THRESH,
+                                           presets=["balanced"], sec_window=30)
+    assert "exposure" in core["per_preset"]["balanced"]["enriched"]
+
+
+def test_render_enriched_report_includes_exposure_column():
+    core = {
+        "per_preset": {"balanced": {
+            "label": "Balanced", "tax_pct": 25,
+            "enriched": {"summary": backtest.summarize(
+                [{"return_pct": 5.0, "reason": "x", "hold_days": 1}]),
+                "compounded": 5.0, "dd": -3.0, "exposure": 42.0},
+            "base": {"summary": backtest.summarize([]), "compounded": 0.0}}},
+        "baseline": 10.0, "buyhold_dd": -20.0, "coverage_pct": 30.0, "n_names": 1,
+        "best_enriched": 5.0, "beat_buyhold": False,
+    }
+    text = backtest.render_enriched_report(core, "2026-07-06", years=4)
+    assert "Exposure" in text          # new header cell
+    assert "42%" in text               # the value, formatted as a percent
+
+
+def test_render_enriched_report_shows_experiment_banner_before_table():
+    core = {
+        "per_preset": {"balanced": {
+            "label": "Balanced", "tax_pct": 0,
+            "enriched": {"summary": backtest.summarize([]), "compounded": 5.0, "dd": -3.0,
+                         "exposure": 10.0},
+            "base": {"summary": backtest.summarize([]), "compounded": 0.0}}},
+        "baseline": 10.0, "buyhold_dd": -20.0, "coverage_pct": 30.0, "n_names": 1,
+        "best_enriched": 5.0, "beat_buyhold": False,
+    }
+    text = backtest.render_enriched_report(core, "2026-07-06", years=4,
+                                           banner="EXPERIMENT — stcg forced to 0")
+    assert "EXPERIMENT" in text
+    assert text.index("EXPERIMENT") < text.index("| Preset |")   # banner is up top
+    # Omitted by default: real reports carry no experiment banner.
+    assert "EXPERIMENT" not in backtest.render_enriched_report(core, "2026-07-06", years=4)
+
+
+# ---- timing-matched market benchmark (isolates cash drag from signal) ----
+
+def test_timing_matched_return_is_market_move_over_holding_windows():
+    a = make_df([100.0, 105.0, 120.0])          # 2024-01-01 .. 01-03
+    b = make_df([50.0, 60.0, 70.0])             # name B, never held -> 0%
+    trades = [{"ticker": "A", "entry_date": "2024-01-01", "exit_date": "2024-01-03"}]  # +20%
+    # A rode close 100 -> 120 over its window; B never held. mean(20%, 0%) = 10%.
+    assert round(backtest.timing_matched_return({"A": a, "B": b}, trades), 1) == 10.0
+
+
+def test_timing_matched_return_compounds_multiple_windows_for_a_name():
+    a = make_df([100.0, 110.0, 110.0, 121.0])   # two windows: +10% then +10% -> compounds +21%
+    trades = [{"ticker": "A", "entry_date": "2024-01-01", "exit_date": "2024-01-02"},
+              {"ticker": "A", "entry_date": "2024-01-03", "exit_date": "2024-01-04"}]
+    assert round(backtest.timing_matched_return({"A": a}, trades), 1) == 21.0
+
+
+def test_enriched_core_reports_exposure_and_timing_per_preset():
+    core = backtest.enriched_backtest_core({"T": make_df([100.0] * 70)}, {"T": {}}, WEIGHTS,
+                                           FULL_RULES, SETTINGS, CAPS, THRESH,
+                                           presets=["balanced"], sec_window=30)
+    enr = core["per_preset"]["balanced"]["enriched"]
+    assert "exposure" in enr and "timing" in enr
+
+
+def test_render_enriched_report_states_pre_registered_signal_outcomes():
+    core = {
+        "per_preset": {"balanced": {
+            "label": "Balanced", "tax_pct": 0,
+            "enriched": {"summary": backtest.summarize([]), "compounded": 5.0, "dd": -3.0,
+                         "exposure": 30.0, "timing": 8.0},
+            "base": {"summary": backtest.summarize([]), "compounded": 0.0}}},
+        "baseline": 10.0, "buyhold_dd": -20.0, "coverage_pct": 30.0, "n_names": 1,
+        "best_enriched": 5.0, "beat_buyhold": False,
+    }
+    text = backtest.render_enriched_report(core, "2026-07-06", years=4)
+    # All three outcome interpretations are present regardless of the numbers.
+    assert "Attribution" in text
+    assert "structural" in text            # S > 0 branch
+    assert "unproven" in text              # S ~ 0 branch
+    assert "anti-predictive" in text       # S < 0 branch
+
+
 def test_simulate_ticker_no_trade_when_threshold_unreachable():
     prices = [100.0] * 70
     df = make_df(prices)

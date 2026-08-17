@@ -1,0 +1,4 @@
+# Normalize all text files to LF in the repo; auto-detect binary and leave it alone.
+# Makes line-ending handling travel with the repo instead of depending on each
+# machine's core.autocrlf. See CLAUDE.md / GitHub's line-ending docs.
+* text=auto
