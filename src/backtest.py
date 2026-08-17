@@ -1,3 +1,4 @@
+import copy
 import datetime as dt
 import sys
 from collections import Counter
@@ -263,6 +264,50 @@ def buy_and_hold_equity_curve(histories) -> list:
     return _portfolio_curve(slices)
 
 
+def average_exposure(histories, trades) -> float:
+    """Average % of tradeable bars the strategy held a position, equal-weight across names.
+
+    Per name: Σ hold_days / (len(df) - MIN_HISTORY). The warm-up bars can't hold a position,
+    so they're excluded from the denominator. A name that's never held counts as 0% (its cash
+    drag is real). This is the cash-drag lens: 100% ≈ always invested (no cash drag), lower ≈
+    more time in cash.
+    # ponytail: uses trade hold_days (bars) rather than re-deriving the exact per-bar invested
+    # flag from the equity curve; the <=1-bar/trade rounding is immaterial for attribution.
+    """
+    held = {}
+    for t in trades:
+        held[t["ticker"]] = held.get(t["ticker"], 0) + t["hold_days"]
+    fracs = []
+    for ticker, df in histories.items():
+        usable = len(df) - MIN_HISTORY
+        if usable > 0:
+            fracs.append(min(held.get(ticker, 0) / usable, 1.0) * 100)
+    return (sum(fracs) / len(fracs)) if fracs else 0.0
+
+
+def timing_matched_return(histories, trades) -> float:
+    """Avg per-name compounded MARKET return captured only during the strategy's holding
+    windows (close-to-close over each [entry_date, exit_date]), flat in cash between.
+
+    Same per-name-average space as compounded_per_name / buy_and_hold, so it slots into the
+    gap decomposition: cash drag = buy_and_hold - this; signal = strategy(no-tax) - this. A
+    never-held name contributes 0% (all its buy-and-hold move was forgone as cash drag)."""
+    by_ticker = {}
+    for t in trades:
+        by_ticker.setdefault(t["ticker"], []).append(t)
+    rets = []
+    for ticker, df in histories.items():
+        close_on = {str(ts.date()): float(c) for ts, c in zip(df.index, df["Close"])}
+        factor = 1.0
+        for t in by_ticker.get(ticker, []):
+            ec = close_on.get(t["entry_date"])
+            xc = close_on.get(t["exit_date"])
+            if ec and xc:
+                factor *= xc / ec
+        rets.append((factor - 1) * 100)
+    return (sum(rets) / len(rets)) if rets else 0.0
+
+
 def render_backtest_report(summary, baseline, trades, date_str, label="default",
                            sources=None, strategy_dd=0.0, buyhold_dd=0.0) -> str:
     compounded = compounded_per_name(trades)
@@ -434,7 +479,9 @@ def enriched_backtest_core(histories, recent_by_ticker, base_weights, base_rules
             "tax_pct": tax,
             "enriched": {"summary": summarize(enr_trades),
                          "compounded": compounded_per_name(enr_trades),
-                         "dd": max_drawdown(strategy_equity_curve(histories, enr_trades))},
+                         "dd": max_drawdown(strategy_equity_curve(histories, enr_trades)),
+                         "exposure": average_exposure(histories, enr_trades),
+                         "timing": timing_matched_return(histories, enr_trades)},
             "base": {"summary": summarize(base_trades),
                      "compounded": compounded_per_name(base_trades)},
         }
@@ -479,11 +526,13 @@ def _ret_per_dd(ret, dd) -> float:
 
 
 def render_enriched_report(core, date_str, label="default", *, years=None, date_range=None,
-                           per_regime=None) -> str:
+                           per_regime=None, banner=None) -> str:
     win = f"{date_range[0]} → {date_range[1]}" if date_range else f"~{years}y"
     tax_pct = next((p["tax_pct"] for p in core["per_preset"].values()), 0)
-    L = [
-        f"# Stock Advisor — Enriched Backtest ({label}, {date_str})", "",
+    L = [f"# Stock Advisor — Enriched Backtest ({label}, {date_str})", ""]
+    if banner:
+        L += [f"> ⚠️ **{banner}**", ""]
+    L += [
         f"Window: **{win}** · names: **{core['n_names']}**", "",
         "> **Partial engine — read this first.** This replays the base technical score PLUS "
         "the only signals honestly reconstructable point-in-time on free data: SEC EDGAR "
@@ -495,8 +544,8 @@ def render_enriched_report(core, date_str, label="default", *, years=None, date_
         "### Strategy vs buy-and-hold, per objective preset (after cost + short-term tax)",
         f"Equal-weight buy-and-hold baseline (untaxed): **{core['baseline']:+.1f}%** per name "
         f"· max drawdown **{core['buyhold_dd']:+.1f}%**", "",
-        "| Preset | Enriched | Base | vs B&H | Win% | Expectancy | Trades | MaxDD |",
-        "|---|---|---|---|---|---|---|---|",
+        "| Preset | Enriched | Base | vs B&H | Win% | Expectancy | Trades | MaxDD | Exposure |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     for key in objectives.ORDER:
         p = core["per_preset"].get(key)
@@ -505,7 +554,8 @@ def render_enriched_report(core, date_str, label="default", *, years=None, date_
         e, b, s = p["enriched"], p["base"], p["enriched"]["summary"]
         L.append(f"| {p['label']} | {e['compounded']:+.1f}% | {b['compounded']:+.1f}% | "
                  f"{e['compounded'] - core['baseline']:+.1f}% | {s['win_rate']:.0f}% | "
-                 f"{s['expectancy']:+.1f}% | {s['count']} | {e['dd']:+.1f}% |")
+                 f"{s['expectancy']:+.1f}% | {s['count']} | {e['dd']:+.1f}% | "
+                 f"{e.get('exposure', 0.0):.0f}% |")
     L += ["", f"_Short-term-gains haircut on winning trades: {tax_pct:.0f}% "
               "(buy-and-hold pays none — that's the hurdle daily trading must clear)._", ""]
 
@@ -536,6 +586,35 @@ def render_enriched_report(core, date_str, label="default", *, years=None, date_
             L.append(f"| {name.replace('_', ' ')} | {plabel} | {ret:+.1f}% | {dd:+.1f}% | "
                      f"{_ret_per_dd(ret, dd):.2f} | {rc['baseline']:+.1f}% | "
                      f"{rc['buyhold_dd']:+.1f}% |")
+
+    L += ["", "## Attribution — pre-registered interpretation",
+          "The gap vs buy-and-hold decomposes exactly as **G = Cash drag + Tax drag − Signal**, "
+          "where **Cash drag = B&H − market-on-in-days** (return forgone while in cash), "
+          "**Tax drag = strategy(no-tax) − strategy(after-tax)**, and "
+          "**Signal = strategy(no-tax) − market-on-in-days** — what the scoring/exit stack added "
+          "over passively riding the *same names on the same in-market days*. The universe is "
+          "fixed (all names traded), so Signal is timing/exit skill, not stock-picking.", "",
+          "_Interpretation fixed BEFORE the run — the sign of Signal decides which holds:_",
+          "- **Signal > 0** — the stack beat passively holding those names on its in-market days. "
+          "The engine adds value; the shortfall vs buy-and-hold is **structural** (tax + time out "
+          "of market), not a signal failure.",
+          "- **Signal ≈ 0** — no better than passively holding those same names those same days. "
+          "The scoring stack is **unproven** — no measurable edge from the signal logic.",
+          "- **Signal < 0** — earned *less* than passively riding those names would have. The "
+          "scoring is **actively anti-predictive** — that is the headline finding.", "",
+          "| Preset | Exposure | Market-on-in-days | Cash drag (B&H−mkt) | Signal (enr−mkt) |",
+          "|---|---|---|---|---|"]
+    for key in objectives.ORDER:
+        p = core["per_preset"].get(key)
+        if not p:
+            continue
+        e = p["enriched"]
+        tim = e.get("timing", 0.0)
+        L.append(f"| {p['label']} | {e.get('exposure', 0.0):.0f}% | {tim:+.1f}% | "
+                 f"{core['baseline'] - tim:+.1f}% | {e['compounded'] - tim:+.1f}% |")
+    L += ["_Signal here uses THIS report's strategy return; in the after-tax control it is net "
+          "of the tax haircut, so read the clean Signal off the no-tax experiment report._"]
+
     L += ["",
           "> Caveat: partial-engine, single-window, free-data backtest. Overfitting and "
           "survivorship risk remain — confirm against the live scorecard as the ledger grows.",
@@ -543,10 +622,15 @@ def render_enriched_report(core, date_str, label="default", *, years=None, date_
     return "\n".join(L) + "\n"
 
 
-def run_enriched(watchlist_name=None, *, years=None) -> str:
+def run_enriched(watchlist_name=None, *, years=None, stcg_override=None) -> str:
     wl = config.load_watchlist(name=watchlist_name)
     base_weights = config.load_weights()
     base_rules = config.load_exit_rules()
+    if stcg_override is not None:
+        # Attribution experiment: force the STCG haircut without touching the checked-in
+        # config. Deep-copy so the on-disk default and any cache stay untouched.
+        base_rules = copy.deepcopy(base_rules)
+        base_rules["backtest"]["stcg_tax_pct"] = stcg_override
     caps = config.load_adjudicator()
     thresholds = config.load_signals()["thresholds"]
     settings = wl["settings"]
@@ -580,6 +664,11 @@ def run_enriched(watchlist_name=None, *, years=None) -> str:
     per_regime = per_regime_summary(histories, recent_by_ticker, base_weights, base_rules,
                                     settings, caps, thresholds, sec_window=sec_window)
     label = watchlist_name or "default"
+    banner = None
+    if stcg_override is not None:
+        label = f"NOTAX-EXPERIMENT-{watchlist_name}" if watchlist_name else "NOTAX-EXPERIMENT"
+        banner = (f"EXPERIMENT — stcg_tax_pct forced to {stcg_override}. NOT a real after-tax "
+                  "result; for tax-drag attribution only.")
     date_str = dt.date.today().isoformat()
     date_range = None
     if histories:
@@ -587,7 +676,7 @@ def run_enriched(watchlist_name=None, *, years=None) -> str:
         ends = [df.index[-1] for df in histories.values()]
         date_range = (str(min(starts).date()), str(max(ends).date()))
     text = render_enriched_report(core, date_str, label=label, years=years,
-                                  date_range=date_range, per_regime=per_regime)
+                                  date_range=date_range, per_regime=per_regime, banner=banner)
 
     reports_dir = ROOT / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
@@ -830,7 +919,8 @@ if __name__ == "__main__":
         _rest = [a for a in _args if a != "--regime"]
         run_regime_validation(_rest[0] if _rest else None)
     elif "--enriched" in _args:
-        _rest = [a for a in _args if a != "--enriched"]
-        run_enriched(_rest[0] if _rest else None)
+        _rest = [a for a in _args if a not in ("--enriched", "--no-tax")]
+        _override = 0 if "--no-tax" in _args else None
+        run_enriched(_rest[0] if _rest else None, stcg_override=_override)
     else:
         run(_args[0] if _args else None)
