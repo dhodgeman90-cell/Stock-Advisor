@@ -201,6 +201,49 @@ def _has_priority_signal(ticker, congress_agg, wsb_map, min_mentions) -> bool:
     return False
 
 
+def _worth_notifying(holdings, quiet: bool) -> bool:
+    """Should today's briefing be emailed at all?
+
+    A fresh pick list is deliberately NOT a reason. The screen has no measured edge, turnover
+    is the one thing measured to be monotonically destructive here (+1.9% at 70 trades ->
+    -18.9% at 350), and a daily email about it manufactures the urge to act on noise. An exit
+    signal on a position you actually hold IS a reason — that is the part with evidence behind
+    it. The run itself still happens every day: the signal capture is what makes any of this
+    answerable later, and stopping it would be the expensive mistake.
+    """
+    if not quiet:
+        return True
+    return any(h.get("signals") for h in (holdings or []))
+
+
+def _attach_benchmark(holdings, positions, spy_df):
+    """Add `spy_pct_from_entry` to each holding: SPY's return over THAT position's own window.
+
+    Matched windows matter — comparing a name bought last week against a year of index return
+    would be meaningless. Positions with no entry_date, or entry dates the SPY history doesn't
+    cover, are left without the field, and render_benchmark_line then skips them rather than
+    inventing a comparison.
+    """
+    if spy_df is None or len(spy_df) == 0:
+        return
+    entry_by = {p["ticker"]: p.get("entry_date") for p in positions}
+    close = spy_df["Close"]
+    last = float(close.iloc[-1])
+    for h in holdings:
+        entry = entry_by.get(h["ticker"])
+        if not entry:
+            continue
+        try:
+            at_or_after = close.loc[close.index >= pd.Timestamp(entry)]
+            if len(at_or_after) == 0:
+                continue
+            start = float(at_or_after.iloc[0])
+            if start > 0:
+                h["spy_pct_from_entry"] = (last / start - 1.0) * 100.0
+        except Exception:
+            continue
+
+
 def _exposure(df, window=21):
     """(avg dollar volume, annualised realised volatility) for a scored name, or (None, None).
 
@@ -486,19 +529,34 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None,
 
     holdings_actionable = any(h.get("signals") for h in holdings)
     has_llm = bool(secrets.get("ANTHROPIC_API_KEY"))
-    use_ai = has_llm and _ai_is_actionable(
-        holdings, [p for _, _, p in cand_rows], buy_threshold)
+    # ai_mode: "live" (agents score and render) | "measure" (agents run, are captured, and are
+    # given NO influence on score, verdict or page) | "off" (never called).
+    #
+    # The three agents drove 223 of 353 "Buy:" verdicts ever printed and have never been
+    # validated in either direction. They are UNVALIDATED, not refuted, so deleting them would
+    # destroy the only route to an answer. "measure" is the control-cohort trick applied to the
+    # AI: capture it point-in-time, keep it out of the decision, and the question becomes
+    # answerable in a few months. Default stays "live" so nothing changes silently;
+    # config/watchlist.yaml opts this install out explicitly.
+    ai_mode = str(settings.get("ai_mode", "live")).strip().lower()
+    if ai_mode not in ("live", "measure", "off"):
+        print(f"[unknown ai_mode {ai_mode!r} — falling back to 'off']")
+        ai_mode = "off"
+    actionable = _ai_is_actionable(holdings, [p for _, _, p in cand_rows], buy_threshold)
+    run_ai = has_llm and ai_mode in ("live", "measure") and actionable
+    use_ai = run_ai and ai_mode == "live"      # may it touch the score / the page?
 
     client = None
-    if use_ai:
+    if run_ai:
         from src import llm
         client = llm.AnthropicClient()
 
-    if use_ai:
+    ai_context = None
+    if run_ai:
         summary = _build_market_summary(scored) + " " + regime_note
-        context = agents.context_agent(client, summary)
-    else:
-        context = det_context
+        ai_context = agents.context_agent(client, summary)
+    context = ai_context if use_ai else det_context
+    ai_rows = []
 
     ranked, vetoed = [], []
     for s, sigs, projected in cand_rows:
@@ -506,20 +564,28 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None,
         congress_sig, wsb_sig = sigs["congress"], sigs["wsb"]
         analyst_sig, insider_sig, earnings_sig = sigs["analyst"], sigs["insider"], sigs["earnings"]
 
-        if use_ai and projected >= buy_threshold:
+        ai_view = None
+        if run_ai and projected >= buy_threshold:
             headlines = news.get_headlines(ticker)
             recent_closes = list(s["_df"]["Close"].tail(10))
-            nv = agents.news_agent(client, ticker, headlines)
-            rv = agents.risk_agent(client, ticker, recent_closes, headlines)
+            a_nv = agents.news_agent(client, ticker, headlines)
+            a_rv = agents.risk_agent(client, ticker, recent_closes, headlines)
             if wsb_sig and (wsb_sig.get("mentions") or 0) >= thr["social_min_mentions"]:
                 chatter = [f"{wsb_sig['mentions']} WSB mentions, "
                            f"{wsb_sig.get('mentions_change')} change in 24h, rank {wsb_sig.get('rank')}"]
-                sv = agents.social_agent(client, ticker, chatter)
+                a_sv = agents.social_agent(client, ticker, chatter)
             else:
-                sv = dict(agents.NEUTRAL_SOCIAL)
+                a_sv = dict(agents.NEUTRAL_SOCIAL)
+            ai_view = {"news": a_nv, "risk": a_rv, "social": a_sv}
+            ai_rows.append({"ticker": ticker, "base_score": s["score"],
+                            "projected_score": projected, **ai_view})
+
+        if use_ai and ai_view is not None:
+            nv, rv, sv = ai_view["news"], ai_view["risk"], ai_view["social"]
         else:
-            # Intentional skip (rules-only mode, or not projecting as a buy) — honest label,
-            # distinct from a genuine agent failure (NEUTRAL_*). Same scoring effect.
+            # Intentional skip (rules-only mode, measurement-only mode, or not projecting as a
+            # buy) — honest label, distinct from a genuine agent failure (NEUTRAL_*). Same
+            # scoring effect, which is exactly the guarantee `measure` mode has to keep.
             nv, rv = dict(agents.SKIPPED_NEWS), dict(agents.SKIPPED_RISK)
             sv = dict(agents.NEUTRAL_SOCIAL)
 
@@ -532,15 +598,30 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None,
         )
         adjd["data_signals_live"] = _count_live_signals(sigs)
         (vetoed if adjd["vetoed"] else ranked).append(adjd)
+
+    # Capture what the agents said, whether or not they were allowed to score. Guarded like the
+    # other ledgers — a logging failure must never break the briefing.
+    if ai_rows:
+        try:
+            signal_log.log_ai(ai_rows, data_dir, date_str,
+                              context={"ai_mode": ai_mode, "regime": combined_regime,
+                                       "ai_regime": (ai_context or {}).get("regime")})
+        except Exception as e:
+            print(f"[ai history log failed: {e}]")
     # Opt-in features need SPY history (regime signal + relative strength). Fetch once, only when
     # a feature is on, degrading to legacy behavior if it fails — the default run never fetches SPY
     # here and stays byte-identical.
     spy_hist = None
-    if entry_model == "relative_strength" or regime_overlay:
+    # SPY is also needed to answer "was holding these better than holding the index?", which is
+    # the comparison the owner actually acted on and the briefing never showed. Fetch it whenever
+    # there are positions to compare, not only when an opt-in feature is on.
+    if entry_model == "relative_strength" or regime_overlay or holdings:
         try:
             spy_hist = fetch("SPY", _regime_fetch_days(lookback))
         except Exception as e:
-            print(f"[regime/RS features: SPY fetch failed, using legacy behavior: {e}]")
+            print(f"[SPY fetch failed — benchmark comparison omitted: {e}]")
+    if holdings and spy_hist is not None:
+        _attach_benchmark(holdings, positions, spy_hist)
     if entry_model == "relative_strength" and spy_hist is not None:
         # Re-rank the shortlist by relative strength + constructive pullback (fixes the inverted
         # top band) instead of the breakout-tilted rank_score.
@@ -649,8 +730,13 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None,
     if not has_llm:
         print("\n[AI agents disabled: no ANTHROPIC_API_KEY — running on deterministic signals only]")
 
-    # Optional email (only when all EMAIL_* secrets are present)
-    if all(secrets.get(k) for k in ("EMAIL_USER", "EMAIL_PASSWORD", "EMAIL_TO")):
+    # Optional email (only when all EMAIL_* secrets are present, and only when there is
+    # something to act on if quiet_unless_actionable is set — see _worth_notifying).
+    quiet = bool(settings.get("quiet_unless_actionable", False))
+    notify = _worth_notifying(holdings, quiet)
+    if quiet and not notify:
+        print("[quiet: no exit signal on any holding — report written, no email sent]")
+    if notify and all(secrets.get(k) for k in ("EMAIL_USER", "EMAIL_PASSWORD", "EMAIL_TO")):
         try:
             briefing.send_email(
                 f"Stock Advisor — {date_str}", text,

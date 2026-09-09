@@ -90,7 +90,9 @@ Read `config/watchlist.yaml` before describing behaviour. As of 2026-08-13:
 
 | Flag | State | Why |
 |---|---|---|
-| `adds_paused` | **true** | BUY calls withheld pending validation. The sell side (exits/trims on open positions) stays fully live; candidates are still scored and shown — labelled **`Candidate`**, never `Buy`. ⚠️ Until 2026-09-09 this flag zeroed only the rotation adds while the shortlist kept printing "Buy" for eight names a morning (332 such verdicts shipped). `verdict.classify(..., adds_paused=True)` now enforces it, guarded end-to-end in `tests/test_main.py`. |
+| `ai_mode` | **off** | The news/risk/social agents drove 223 of 353 "Buy:" verdicts ever printed on **zero** validation. Switched off, not deleted — unvalidated is not refuted. `measure` runs them, captures to `data/ai_history.jsonl`, and gives them **no** influence on score, verdict or page; that is the only route to ever answering whether they work, and it costs a few cents a day. `live` is the legacy default. |
+| `quiet_unless_actionable` | **true** | Email only when a holding trips an exit rule. The run and the daily signal capture continue regardless — only the notification stops. |
+| `adds_paused` | **true** | BUY calls withheld — **not** "pending validation" any more; validation happened six times. The sell side (exits/trims on open positions) stays fully live; candidates are still scored and shown — labelled **`Candidate`**, never `Buy`. ⚠️ Until 2026-09-09 this flag zeroed only the rotation adds while the shortlist kept printing "Buy" for eight names a morning (332 such verdicts shipped). `verdict.classify(..., adds_paused=True)` now enforces it, guarded end-to-end in `tests/test_main.py`. |
 | `entry_model: relative_strength` | **commented OUT** | The 2026-07-27 P0 audit disabled it: RS is renormalized inside an already-weak 25-name pre-filtered pool, and it has zero backtest and zero forward test. |
 | `regime_overlay` | **commented OUT** | Its own kill criterion returned **"DO NOT SHIP"** (3 of 4 checks FAIL) in `reports/backtest-regime-default-2026-07-27.md`. |
 

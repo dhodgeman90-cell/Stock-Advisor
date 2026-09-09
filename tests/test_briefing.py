@@ -411,3 +411,70 @@ def test_other_scored_list_falls_back_to_the_score_when_rank_is_unknown():
     others = [{"ticker": "AAA", "score": 72.0}]
     out = briefing.render_briefing([], [], others, [], "2026-09-09", "neutral", "n", holdings=[])
     assert "72/100" in out
+
+
+# ---- the comparison the briefing never made ----
+# Holdings were reported as "-3.0% from entry", which answers "did this go up?" but not the
+# question the owner actually acted on: "was holding THIS better than holding the index?"
+# Over 528 logged picks the app beat SPY 45% of the time, and nothing on the page showed it.
+
+def _h(ticker, pct, spy_pct=None):
+    h = {"ticker": ticker, "current_price": 100.0, "pct_from_entry": pct, "signals": []}
+    if spy_pct is not None:
+        h["spy_pct_from_entry"] = spy_pct
+    return h
+
+
+def test_benchmark_line_shows_positions_against_the_index_over_the_same_days():
+    out = briefing.render_benchmark_line([_h("AAA", 4.0, 1.0), _h("BBB", -2.0, 1.0)])
+    assert "+1.0%" in out            # your positions, equal-weighted
+    assert "+1.0%" in out            # SPY over the matched windows
+    assert "same days" in out.lower()
+
+
+def test_benchmark_line_names_the_shortfall_plainly_when_behind():
+    out = briefing.render_benchmark_line([_h("AAA", -4.0, 2.0)])
+    assert "-6.0" in out             # the difference is stated, not left to the reader
+    assert "behind" in out.lower()
+
+
+def test_benchmark_line_says_ahead_when_ahead():
+    out = briefing.render_benchmark_line([_h("AAA", 8.0, 2.0)])
+    assert "ahead" in out.lower() and "+6.0" in out
+
+
+def test_benchmark_line_is_silent_rather_than_guessing():
+    assert briefing.render_benchmark_line([]) == ""
+    assert briefing.render_benchmark_line(None) == ""
+    assert briefing.render_benchmark_line([_h("AAA", 4.0)]) == ""      # no SPY figure -> nothing
+
+
+def test_benchmark_line_ignores_holdings_with_no_benchmark_figure():
+    # one holding priced, one not: report the one we can, not a mixture pretending to be both
+    out = briefing.render_benchmark_line([_h("AAA", 10.0, 2.0), _h("BBB", -50.0)])
+    assert "+10.0%" in out and "+8.0" in out
+
+
+def test_benchmark_line_appears_in_the_rendered_briefing():
+    out = briefing.render_briefing([], [], [], [], "2026-09-09", "neutral", "n",
+                                   holdings=[_h("AAA", -4.0, 2.0)])
+    assert "behind" in out.lower()
+    assert out.index("Your holdings") < out.index("behind")
+
+
+def test_candidate_omits_the_agent_lines_when_no_agent_ran():
+    # With ai_mode: off, every candidate carried two filler lines -- "not AI-analyzed
+    # (rules-only)" x16 on a normal day -- which say nothing and crowd out the signals that
+    # do. A line with no opinion behind it should not be printed.
+    r = _adjudicated("AAA", 88, 80, "not AI-analyzed (rules-only)", "low",
+                     "not AI-analyzed (rules-only; no opinion)", [])
+    out = briefing.render_briefing([r], [], [], [], "2026-09-09", "neutral", "n", holdings=[])
+    assert "not AI-analyzed" not in out
+    assert "AAA" in out                                  # the candidate itself still renders
+
+
+def test_candidate_still_shows_a_real_agent_opinion():
+    r = _adjudicated("AAA", 88, 80, "Landed a big contract", "medium", "earnings in 3 days", [])
+    out = briefing.render_briefing([r], [], [], [], "2026-09-09", "neutral", "n", holdings=[])
+    assert "Landed a big contract" in out
+    assert "earnings in 3 days" in out

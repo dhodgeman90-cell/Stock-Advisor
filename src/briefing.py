@@ -58,11 +58,60 @@ def render_holdings_section(holdings, run_date=None) -> str:
     return "\n".join(lines)
 
 
+def render_benchmark_line(holdings) -> str:
+    """'Your positions vs SPY over the same days' — the comparison the briefing never made.
+
+    Holdings were only ever reported as "-3.0% from entry", which answers "did this go up?"
+    The question the owner actually acted on is different: was holding THESE better than
+    holding the index over the same days? Across 528 logged picks the answer was 45%, and
+    nothing on the page said so.
+
+    Equal-weighted across holdings, each measured against SPY over that position's own window,
+    so a name bought last week isn't compared to a year of index return. Holdings with no
+    benchmark figure are skipped rather than mixed in; if none have one, this renders nothing
+    at all rather than implying a comparison it cannot make.
+    """
+    rows = [h for h in (holdings or []) if h.get("spy_pct_from_entry") is not None]
+    if not rows:
+        return ""
+    mine = sum(float(h.get("pct_from_entry") or 0.0) for h in rows) / len(rows)
+    spy = sum(float(h["spy_pct_from_entry"]) for h in rows) / len(rows)
+    gap = mine - spy
+    word = "ahead of" if gap >= 0 else "behind"
+    n = len(rows)
+    return (f"_Your positions: **{mine:+.1f}%** · SPY over the same days: **{spy:+.1f}%** · "
+            f"**{gap:+.1f} pts {word}** the index ({n} position{'s' if n != 1 else ''}, "
+            f"equal-weighted)._")
+
+
+def _strip_md(text: str) -> str:
+    """Markdown emphasis markers out, so the same one sentence can render in the HTML email."""
+    return text.replace("**", "").replace("_", "").strip()
+
+
 def _amount_range(low, high) -> str:
     """Compact dollar range, e.g. '$100k–$250k' or '$50k'."""
     def fmt(v):
         return f"${v / 1000:.0f}k" if v >= 1000 else f"${v:.0f}"
     return fmt(low) if low == high else f"{fmt(low)}–{fmt(high)}"
+
+
+def _agent_lines(r) -> list:
+    """The news/risk lines, but only when an agent actually had an opinion.
+
+    With `ai_mode: off` these rendered as "not AI-analyzed (rules-only)" on every candidate —
+    sixteen lines a morning that say nothing and bury the signals that do. Same for a genuine
+    agent outage. No opinion, no line.
+    """
+    out = []
+    summary = ((r.get("news") or {}).get("summary") or "").strip()
+    if summary and "not AI-analyzed" not in summary and "unavailable" not in summary:
+        out.append(f"📰 {_clip(summary)}")
+    risk = r.get("risk") or {}
+    reason = (risk.get("reason") or "").strip()
+    if reason and "not AI-analyzed" not in reason and "unavailable" not in reason:
+        out.append(f"🚩 risk {risk.get('risk_level', '?')}: {_clip(reason)}")
+    return out
 
 
 def _candidate_insight_lines(r) -> list:
@@ -332,6 +381,7 @@ def render_briefing(ranked, vetoed, others, excluded, date_str, regime, regime_n
         render_rotation_section(rotation_plan),
         "",
         render_holdings_section(holdings, run_date=date_str),
+        render_benchmark_line(holdings),
         "",
         _candidates_heading(adds_paused),
         _candidates_standing_note(scorecard_summary),
@@ -346,8 +396,8 @@ def render_briefing(ranked, vetoed, others, excluded, date_str, regime, regime_n
         L.append(f"- **{r['ticker']}** — {v['call']}: {v['reason']} "
                  f"_({_rank_note(r)}{_exposure_note(r)}{_thin_data_note(r)})_")
         # Supporting detail, demoted below the verdict (was a raw 'adj:' math dump).
-        L.append(f"    - 📰 {_clip(r['news']['summary'])}")
-        L.append(f"    - 🚩 risk {r['risk']['risk_level']}: {_clip(r['risk']['reason'])}")
+        for line in _agent_lines(r):
+            L.append(f"    - {line}")
         for line in _candidate_insight_lines(r):
             L.append(f"    - {line}")
 
@@ -452,10 +502,9 @@ def _candidate_card_html(r, e, green, buy_threshold=65, underperforming=False,
     details = (
         '<details style="margin-top:6px;">'
         '<summary style="font-size:11px;color:#9ca3af;cursor:pointer;">details</summary>'
-        f'<div style="font-size:12.5px;color:#4b5563;margin-top:4px;">📰 {e(_clip(r["news"]["summary"]))}</div>'
-        f'<div style="font-size:12.5px;color:#4b5563;">🚩 risk {e(r["risk"]["risk_level"])}: '
-        f'{e(_clip(r["risk"]["reason"]))}</div>'
-        f'{insight_html}</details>'
+        + "".join(f'<div style="font-size:12.5px;color:#4b5563;margin-top:2px;">{e(line)}</div>'
+                  for line in _agent_lines(r))
+        + f'{insight_html}</details>'
     )
     return (
         f'<div style="border-left:3px solid {green};background:#f7faf8;'
@@ -544,6 +593,9 @@ def render_briefing_html(ranked, vetoed, others, excluded, date_str, regime,
         '<div style="font-size:14px;font-weight:700;color:#0f172a;margin:18px 0 10px;">'
         '📊 Your holdings</div>',
         _holdings_html(holdings or [], e, date_str),
+        (f'<div style="font-size:11.5px;color:#4b5563;margin-top:6px;">'
+         f'{e(_strip_md(render_benchmark_line(holdings)))}</div>'
+         if render_benchmark_line(holdings) else ''),
         '<div style="font-size:14px;font-weight:700;color:#0f172a;margin:20px 0 4px;">'
         f'{e(_candidates_heading(adds_paused).lstrip("# "))}</div>',
         '<div style="font-size:11px;color:#6b7280;margin-bottom:10px;">'
