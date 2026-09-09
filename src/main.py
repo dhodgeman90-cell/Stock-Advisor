@@ -201,6 +201,27 @@ def _has_priority_signal(ticker, congress_agg, wsb_map, min_mentions) -> bool:
     return False
 
 
+def _exposure(df, window=21):
+    """(avg dollar volume, annualised realised volatility) for a scored name, or (None, None).
+
+    Surfaced per candidate so the reader can see what the screen is handing them. Measured over
+    the full ~7-year panel, the top-8 by score sits at a median 0.90x the dollar volume of the
+    pool it was screened from and is thinner on 60% of days, in every year 2020-2026 — a small
+    but persistent size tilt that breakout+volume creates and nobody asked for.
+    """
+    if df is None or len(df) < window + 1:
+        return None, None
+    try:
+        dollar_vol = float((df["Close"] * df["Volume"]).tail(window).mean())
+        rets = df["Close"].pct_change().tail(window)
+        vol = float(rets.std()) * (252 ** 0.5)
+    except Exception:
+        return None, None
+    if not (dollar_vol > 0):
+        return None, None
+    return dollar_vol, (vol if vol == vol else None)     # NaN-safe
+
+
 def _rs_reranked(ranked, df_by_ticker, spy_close):
     """Re-rank the shortlist by the relative-strength entry model (opt-in): cross-sectional RS
     percentile vs SPY blended with a constructive-pullback preference, replacing the
@@ -390,7 +411,12 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None,
     control = _control_cohort(cands, enriched_names,
                               settings.get("control_cohort_size", 0), date_str)
     control_names = {s["ticker"] for s in control}
-    others = [{"ticker": s["ticker"], "score": s["score"]}
+    # Screen position, so the tail list doesn't repeat the saturation problem the shortlist had:
+    # four names printing an identical "100/100" tells the reader nothing. `cands` is already
+    # the full eligible pool in screen order, so the index IS the rank.
+    pool_rank_of = {s["ticker"]: i for i, s in enumerate(cands, start=1)}
+    others = [{"ticker": s["ticker"], "score": s["score"],
+               "pool_rank": pool_rank_of[s["ticker"]], "pool_size": len(cands)}
               for s in cands
               if s["ticker"] not in enriched_names and s["ticker"] not in control_names]
     excluded = [{"ticker": s["ticker"], "reason": s["reason"]}
@@ -531,11 +557,14 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None,
     pool_size = len(cands)
     for i, r in enumerate(ranked, start=1):
         r["pool_rank"], r["pool_size"] = i, pool_size
+        r["liquidity_usd"], r["realized_vol"] = _exposure(df_by_ticker.get(r["ticker"]))
 
     # Display cap: show only the top `shortlist_size` enriched candidates so the briefing stays
     # concise on a wide universe; the enriched-but-not-shown drop into "other scored".
     if len(ranked) > shortlist_size:
-        overflow = [{"ticker": r["ticker"], "score": r["final_score"]}
+        # Carry the screen position across, or these rows fall back to the saturated score.
+        overflow = [{"ticker": r["ticker"], "score": r["final_score"],
+                     "pool_rank": r.get("pool_rank"), "pool_size": r.get("pool_size")}
                     for r in ranked[shortlist_size:]]
         ranked = ranked[:shortlist_size]
         others = sorted(overflow + others, key=lambda o: o["score"], reverse=True)

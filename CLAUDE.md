@@ -27,6 +27,31 @@ backtest with a pre-registered kill criterion (`backtest.validate_regime_overlay
 **What the tool is actually for:** lower drawdown, downturn protection, and *idea surfacing*.
 It is a **risk-managed systematic idea generator, not an index beater.** Say so plainly.
 
+### The score carries no information — measured on ~7 years, 2026-09-09
+
+`research.panel_ic` on the restored deep cache (1,856 dates × 575 tickers, ~1,800 daily
+cross-sections) puts `base_score`'s rank IC vs forward excess return at:
+
+| 5d | 10d | 21d | 63d |
+|---|---|---|---|
+| −0.0049 (t=−0.67) | −0.0058 (t=−0.65) | −0.0093 (t=−0.79) | −0.0295 (t=−1.86) |
+
+IC > 0 on ~50% of days. Per year at 21d it flips sign with no stability: −0.104, −0.034,
+−0.011, **+0.009**, −0.004, **+0.032**, −0.010, −0.011.
+
+**The score is not inverted and not anti-predictive. It is indistinguishable from zero.**
+Do not "fix the sign" — that move has already failed here once.
+
+⚠️ **The six-week window overstates everything by roughly 16×.** The same test on
+`signal_history.jsonl` alone (25 usable overlapping cross-sections) gave 5d IC −0.078. Treat
+any result from that file as a hypothesis, never as a fitted parameter. Run
+`python -m src.research` — it prints both, side by side, deliberately.
+
+**The unintended exposure:** the top-8 sits at a median **0.90×** the dollar volume of the pool
+it was screened from, and is thinner on 60% of days, every year 2020–2026 (0.86×–0.97×).
+`breakout(30) + volume(30)` prefers thinner names. Small, persistent, uncompensated — the
+briefing now shows each name's `$vol/day` and realised vol rather than carrying it silently.
+
 Also honest-scope: **only ~25% of the signal engine is point-in-time backtestable** on free
 data (base technicals + SEC EDGAR). Congress / analyst / options / insider / short-interest /
 revisions / AI signals can only ever be proven **forward**, via the live scorecard ledger.
@@ -40,7 +65,7 @@ Read `config/watchlist.yaml` before describing behaviour. As of 2026-08-13:
 
 | Flag | State | Why |
 |---|---|---|
-| `adds_paused` | **true** | BUY calls withheld pending validation. The sell side (exits/trims on open positions) stays fully live; candidates are still scored and shown. |
+| `adds_paused` | **true** | BUY calls withheld pending validation. The sell side (exits/trims on open positions) stays fully live; candidates are still scored and shown — labelled **`Candidate`**, never `Buy`. ⚠️ Until 2026-09-09 this flag zeroed only the rotation adds while the shortlist kept printing "Buy" for eight names a morning (332 such verdicts shipped). `verdict.classify(..., adds_paused=True)` now enforces it, guarded end-to-end in `tests/test_main.py`. |
 | `entry_model: relative_strength` | **commented OUT** | The 2026-07-27 P0 audit disabled it: RS is renormalized inside an already-weak 25-name pre-filtered pool, and it has zero backtest and zero forward test. |
 | `regime_overlay` | **commented OUT** | Its own kill criterion returned **"DO NOT SHIP"** (3 of 4 checks FAIL) in `reports/backtest-regime-default-2026-07-27.md`. |
 
@@ -59,11 +84,19 @@ python -m src.main
 # Run the local browser dashboard (FastAPI on 127.0.0.1, never network-exposed)
 python -m src.app
 
-# Run the tests — 570 tests, ~36s
+# Run the tests — 612 tests, ~31s
 ./.venv/Scripts/python.exe -m pytest -q
 
 # Regime-overlay validation gate
 python -m src.backtest --regime
+
+# Rank-IC harness: does a signal actually order the cross-section?
+# Prints the 6-week enrichment-signal table AND the ~7-year price-panel version.
+python -m src.research
+
+# Refill the deep price cache (~7y x 590 names, ~20s). Safe to re-run: since the
+# save_cache fix the daily briefing no longer overwrites it.
+./.venv/Scripts/python.exe scripts/fetch_deep_history.py
 ```
 
 Always use `./.venv/Scripts/python.exe`, not bare `python` — the venv holds the deps.
@@ -102,6 +135,24 @@ Keep it green. If it goes red, fix the cause; do not disable the check.
   excluded liquid high-priced names.
 - Exits: 8%/20% + ATR 2.5× in `config/exits.yaml`. Tighter stops (the old 5%/6%) churn out of
   every winner — loosening them 3.5×'d the default preset's after-cost return.
+- **`data.save_cache` MERGES, it does not overwrite.** It used to be a bare `to_csv`, and since
+  the daily run refetches only 300 calendar days it destroyed the 7-year cache every morning
+  (median depth was 204 bars; 3 of 589 files had a year). The merge is re-adjustment-aware:
+  `yfinance` runs `auto_adjust=True`, so a split re-scales the whole series retroactively and a
+  naive append would fabricate a price cliff. `_merge_history` takes the **median close ratio
+  across the overlap**, rescales the old tail onto the new basis, inverse-scales Volume, and
+  refuses to splice at all if that ratio isn't near-constant (IQR > 0.5%). Don't "simplify" it
+  back to a concat.
+- **The briefing shows a screen position, not a score.** 61% of logged picks used to pin at
+  exactly `final_score` 100.0. `rank N of M` always discriminates. The ledger now also stores
+  `rank_score`, `pool_rank`, `pool_size`, `run_at` and `bar_date`.
+- **`bar_date` is the grading anchor, not `date`.** `_drop_incomplete` withholds an open
+  session's bar, so a pre-open run scores off yesterday and a post-close run off today. Nothing
+  recorded which until 2026-09-09; classifying the 528 legacy rows found 33% prior-bar, 9%
+  same-date, 37% neither. Legacy rows cannot be repaired — exclude, don't average.
+- `_ret_per_dd` branches on the sign of the return **on purpose**. `ret / abs(dd)` inverts for
+  losing periods (a worse drawdown scored better), which corrupted regime kill-criterion checks
+  c1 and c4.
 
 ---
 
@@ -109,7 +160,7 @@ Keep it green. If it goes red, fix the cause; do not disable the check.
 
 1. **Never claim this beats the market.** See the finding above. State the drawdown/idea-surface
    value instead.
-2. **Use TDD** — this project is test-driven (570 tests). Write the failing test first
+2. **Use TDD** — this project is test-driven (612 tests). Write the failing test first
    (`superpowers:test-driven-development`).
 3. **Verify live config before describing behaviour** — flags have been flipped both ways.
 4. **Always explain commands** before running them; the owner is a beginner.

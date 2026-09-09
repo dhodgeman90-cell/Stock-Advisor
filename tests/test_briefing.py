@@ -363,3 +363,51 @@ def test_render_briefing_html_omits_empty_sections_and_shows_vetoed():
     assert "Other scored" not in html_out              # empty others omitted
     assert "Excluded" not in html_out                  # empty excluded omitted
     assert "No tracked positions" in html_out          # empty holdings note
+
+
+# ---- the liquidity/volatility the screen is actually taking on ----
+# Measured over the full ~7-year panel: the top-8 by score sits at a median 0.90x the dollar
+# volume of the pool it was screened from, and is thinner than that pool on 60% of days --
+# in every year from 2020 to 2026 (0.86x to 0.97x). That is a small, persistent, uncompensated
+# exposure nobody chose. It is shown rather than silently carried.
+
+def _exposed(ticker, **kw):
+    r = _adjudicated(ticker, 88, 80, "a deal", "low", "no flags", ["+15 catalyst"])
+    r.update(kw)
+    return r
+
+
+def test_candidate_line_shows_liquidity_and_volatility_when_known():
+    ranked = [_exposed("AAA", liquidity_usd=275_000_000.0, realized_vol=0.363)]
+    out = briefing.render_briefing(ranked, [], [], [], "2026-09-09", "neutral", "n", holdings=[])
+    assert "$275M/d" in out
+    assert "36% vol" in out
+
+
+def test_liquidity_is_rendered_at_a_readable_scale():
+    ranked = [_exposed("BIG", liquidity_usd=4_200_000_000.0, realized_vol=0.21),
+              _exposed("SML", liquidity_usd=8_400_000.0, realized_vol=0.55)]
+    out = briefing.render_briefing(ranked, [], [], [], "2026-09-09", "neutral", "n", holdings=[])
+    assert "$4.2B/d" in out and "$8M/d" in out
+
+
+def test_candidate_line_omits_the_exposure_rather_than_printing_a_placeholder():
+    ranked = [_exposed("AAA")]        # no liquidity/vol computed (e.g. cache miss)
+    out = briefing.render_briefing(ranked, [], [], [], "2026-09-09", "neutral", "n", holdings=[])
+    assert "/d" not in out
+    assert "vol)" not in out
+
+
+def test_other_scored_list_shows_rank_not_a_saturated_score():
+    # The tail had the same defect as the shortlist: four names all printing "100/100".
+    others = [{"ticker": "AAA", "score": 100.0, "pool_rank": 9, "pool_size": 575},
+              {"ticker": "BBB", "score": 100.0, "pool_rank": 10, "pool_size": 575}]
+    out = briefing.render_briefing([], [], others, [], "2026-09-09", "neutral", "n", holdings=[])
+    assert "rank 9 of 575" in out and "rank 10 of 575" in out
+    assert "100/100" not in out
+
+
+def test_other_scored_list_falls_back_to_the_score_when_rank_is_unknown():
+    others = [{"ticker": "AAA", "score": 72.0}]
+    out = briefing.render_briefing([], [], others, [], "2026-09-09", "neutral", "n", holdings=[])
+    assert "72/100" in out

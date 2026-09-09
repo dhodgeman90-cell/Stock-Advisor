@@ -268,7 +268,33 @@ def _rank_note(r) -> str:
     rank, size = r.get("pool_rank"), r.get("pool_size")
     if rank and size:
         return f"rank {rank} of {size}"
-    return f"score {r['final_score']:.0f}/100"
+    # Shortlist rows carry final_score; the "other scored" tail carries plain score.
+    score = r.get("final_score", r.get("score"))
+    return f"score {score:.0f}/100" if score is not None else "unranked"
+
+
+def _exposure_note(r) -> str:
+    """' · $275M/d · 36% vol' — the liquidity and volatility this name actually carries.
+
+    Measured over the full ~7-year panel: the top-8 by score sits at a median 0.90x the dollar
+    volume of the pool it was screened from, and is thinner than that pool on 60% of days, in
+    every year from 2020 to 2026 (0.86x-0.97x). breakout(30) + volume(30) quietly prefers
+    thinner names, so the screen carries a small, persistent, uncompensated size tilt that
+    nobody chose. It is modest, so the fix is to show it rather than to start overriding the
+    ranking; a reader can see what they are being handed. Silent when either value is unknown.
+    """
+    dv, vol = r.get("liquidity_usd"), r.get("realized_vol")
+    if dv is None and vol is None:
+        return ""
+    parts = []
+    if dv is not None:
+        if dv >= 1e9:
+            parts.append(f"${dv / 1e9:.1f}B/d")
+        else:
+            parts.append(f"${dv / 1e6:.0f}M/d")
+    if vol is not None:
+        parts.append(f"{vol * 100:.0f}% vol")
+    return " · " + " · ".join(parts)
 
 
 def _thin_data_note(r) -> str:
@@ -312,12 +338,13 @@ def render_briefing(ranked, vetoed, others, excluded, date_str, regime, regime_n
     ]
     if not ranked:
         L.append("_No candidates today._")
-    conf = verdict.confidence_text(scorecard_summary)
     for r in ranked:
         v = verdict.classify(r, buy_threshold, underperforming=underperforming,
                              adds_paused=adds_paused)
+        # The realised base rate leads the section once; repeating it on all eight lines just
+        # buries the per-name detail that actually differs.
         L.append(f"- **{r['ticker']}** — {v['call']}: {v['reason']} "
-                 f"_({_rank_note(r)} · {conf}{_thin_data_note(r)})_")
+                 f"_({_rank_note(r)}{_exposure_note(r)}{_thin_data_note(r)})_")
         # Supporting detail, demoted below the verdict (was a raw 'adj:' math dump).
         L.append(f"    - 📰 {_clip(r['news']['summary'])}")
         L.append(f"    - 🚩 risk {r['risk']['risk_level']}: {_clip(r['risk']['reason'])}")
@@ -334,7 +361,7 @@ def render_briefing(ranked, vetoed, others, excluded, date_str, regime, regime_n
         L.append("")
         L.append("## Other scored (below shortlist)")
         for o in others:
-            L.append(f"- {o['ticker']}: {o['score']:.0f}/100")
+            L.append(f"- {o['ticker']}: {_rank_note(o)}")
 
     if excluded:
         L.append("")
@@ -413,7 +440,7 @@ _VERDICT_COLORS = {
 
 
 def _candidate_card_html(r, e, green, buy_threshold=65, underperforming=False,
-                         adds_paused=False, confidence="") -> str:
+                         adds_paused=False) -> str:
     """Left-bordered card: one clear verdict up top, the raw signal detail collapsed below."""
     v = verdict.classify(r, buy_threshold, underperforming=underperforming,
                          adds_paused=adds_paused)
@@ -438,7 +465,7 @@ def _candidate_card_html(r, e, green, buy_threshold=65, underperforming=False,
         f'font-size:11.5px;font-weight:700;">{e(v["call"])}</span> '
         f'<span style="color:#4b5563;font-size:12.5px;">{e(v["reason"])}</span></div>'
         f'<div style="font-size:11px;color:#9ca3af;margin-top:3px;">'
-        f'{e(_rank_note(r))} · {e(confidence)}{_thin_data_note(r)}</div>'
+        f'{e(_rank_note(r))}{e(_exposure_note(r))}{_thin_data_note(r)}</div>'
         f'{details}</div>'
     )
 
@@ -523,9 +550,8 @@ def render_briefing_html(ranked, vetoed, others, excluded, date_str, regime,
         f'Screen output, not a forecast — {e(verdict.confidence_text(scorecard_summary))}.</div>',
     ]
     if ranked:
-        conf = verdict.confidence_text(scorecard_summary)
         P.extend(_candidate_card_html(r, e, green, buy_threshold, underperforming,
-                                      adds_paused=adds_paused, confidence=conf)
+                                      adds_paused=adds_paused)
                  for r in ranked)
     else:
         P.append('<div style="font-size:12.5px;color:#6b7280;">No candidates today.</div>')
