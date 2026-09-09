@@ -91,13 +91,15 @@ def test_scorecard_summary_marks_unmeasurable_alpha_as_none():
     assert s["underperforming"] is None
 
 
-def test_confidence_stays_low_when_performance_is_unknown():
-    from src import verdict
-    r = {"ticker": "AAA", "final_score": 90.0, "vetoed": False,
-         "adjustment_detail": [{"key": "catalyst", "points": 15},
-                               {"key": "analyst_bull", "points": 8}]}
-    v = verdict.classify(r, 65, underperforming=None)
-    assert v["confidence"] == "low"      # unknown is not permission to project conviction
+def test_briefing_never_states_a_track_record_it_cannot_support():
+    # Replaces the old "confidence stays low when performance is unknown" test. The ordinal tag
+    # it guarded is gone: 368 of 368 tags ever printed read "low confidence", because the tag
+    # collapsed to "low" whenever the system was underperforming, which it always was. Unknown
+    # performance must still never read as conviction — now it must print no rate at all.
+    out = briefing.render_briefing(**_tone_args(), scorecard_summary=_sc(n_matured=8, enough=False))
+    assert "no measured track record yet" in out
+    assert "confidence" not in out.lower()          # no bare ordinal survives anywhere
+    assert "% of past calls" not in out             # and no invented rate
 
 
 def test_reality_check_withholds_numbers_below_sample_floor():
@@ -220,7 +222,7 @@ def test_render_briefing_puts_holdings_above_candidates():
                            "detail": "down 9.2%"}])]
     text = briefing.render_briefing(ranked, [], [], [], "2026-06-08",
                                     "risk_on", "Upbeat.", holdings=holdings)
-    assert text.index("NVDA") < text.index("Top candidates")
+    assert text.index("NVDA") < text.index("Screen results")
 
 
 def test_signal_pill_colors_by_level():
@@ -336,7 +338,7 @@ def test_render_briefing_includes_rotation_and_discovery():
                                     holdings=[], rotation_plan=plan, discovery=discovery)
     assert "SMCI" in text                              # rotation add surfaced
     assert "BIG" in text                               # discovery surfaced
-    assert text.index("rotation") < text.index("Top candidates") if "rotation" in text.lower() else True
+    assert text.index("rotation") < text.index("Screen results") if "rotation" in text.lower() else True
 
 
 def test_render_briefing_html_includes_rotation_and_discovery():
@@ -361,3 +363,118 @@ def test_render_briefing_html_omits_empty_sections_and_shows_vetoed():
     assert "Other scored" not in html_out              # empty others omitted
     assert "Excluded" not in html_out                  # empty excluded omitted
     assert "No tracked positions" in html_out          # empty holdings note
+
+
+# ---- the liquidity/volatility the screen is actually taking on ----
+# Measured over the full ~7-year panel: the top-8 by score sits at a median 0.90x the dollar
+# volume of the pool it was screened from, and is thinner than that pool on 60% of days --
+# in every year from 2020 to 2026 (0.86x to 0.97x). That is a small, persistent, uncompensated
+# exposure nobody chose. It is shown rather than silently carried.
+
+def _exposed(ticker, **kw):
+    r = _adjudicated(ticker, 88, 80, "a deal", "low", "no flags", ["+15 catalyst"])
+    r.update(kw)
+    return r
+
+
+def test_candidate_line_shows_liquidity_and_volatility_when_known():
+    ranked = [_exposed("AAA", liquidity_usd=275_000_000.0, realized_vol=0.363)]
+    out = briefing.render_briefing(ranked, [], [], [], "2026-09-09", "neutral", "n", holdings=[])
+    assert "$275M/d" in out
+    assert "36% vol" in out
+
+
+def test_liquidity_is_rendered_at_a_readable_scale():
+    ranked = [_exposed("BIG", liquidity_usd=4_200_000_000.0, realized_vol=0.21),
+              _exposed("SML", liquidity_usd=8_400_000.0, realized_vol=0.55)]
+    out = briefing.render_briefing(ranked, [], [], [], "2026-09-09", "neutral", "n", holdings=[])
+    assert "$4.2B/d" in out and "$8M/d" in out
+
+
+def test_candidate_line_omits_the_exposure_rather_than_printing_a_placeholder():
+    ranked = [_exposed("AAA")]        # no liquidity/vol computed (e.g. cache miss)
+    out = briefing.render_briefing(ranked, [], [], [], "2026-09-09", "neutral", "n", holdings=[])
+    assert "/d" not in out
+    assert "vol)" not in out
+
+
+def test_other_scored_list_shows_rank_not_a_saturated_score():
+    # The tail had the same defect as the shortlist: four names all printing "100/100".
+    others = [{"ticker": "AAA", "score": 100.0, "pool_rank": 9, "pool_size": 575},
+              {"ticker": "BBB", "score": 100.0, "pool_rank": 10, "pool_size": 575}]
+    out = briefing.render_briefing([], [], others, [], "2026-09-09", "neutral", "n", holdings=[])
+    assert "rank 9 of 575" in out and "rank 10 of 575" in out
+    assert "100/100" not in out
+
+
+def test_other_scored_list_falls_back_to_the_score_when_rank_is_unknown():
+    others = [{"ticker": "AAA", "score": 72.0}]
+    out = briefing.render_briefing([], [], others, [], "2026-09-09", "neutral", "n", holdings=[])
+    assert "72/100" in out
+
+
+# ---- the comparison the briefing never made ----
+# Holdings were reported as "-3.0% from entry", which answers "did this go up?" but not the
+# question the owner actually acted on: "was holding THIS better than holding the index?"
+# Over 528 logged picks the app beat SPY 45% of the time, and nothing on the page showed it.
+
+def _h(ticker, pct, spy_pct=None):
+    h = {"ticker": ticker, "current_price": 100.0, "pct_from_entry": pct, "signals": []}
+    if spy_pct is not None:
+        h["spy_pct_from_entry"] = spy_pct
+    return h
+
+
+def test_benchmark_line_shows_positions_against_the_index_over_the_same_days():
+    out = briefing.render_benchmark_line([_h("AAA", 4.0, 1.0), _h("BBB", -2.0, 1.0)])
+    assert "+1.0%" in out            # your positions, equal-weighted
+    assert "+1.0%" in out            # SPY over the matched windows
+    assert "same days" in out.lower()
+
+
+def test_benchmark_line_names_the_shortfall_plainly_when_behind():
+    out = briefing.render_benchmark_line([_h("AAA", -4.0, 2.0)])
+    assert "-6.0" in out             # the difference is stated, not left to the reader
+    assert "behind" in out.lower()
+
+
+def test_benchmark_line_says_ahead_when_ahead():
+    out = briefing.render_benchmark_line([_h("AAA", 8.0, 2.0)])
+    assert "ahead" in out.lower() and "+6.0" in out
+
+
+def test_benchmark_line_is_silent_rather_than_guessing():
+    assert briefing.render_benchmark_line([]) == ""
+    assert briefing.render_benchmark_line(None) == ""
+    assert briefing.render_benchmark_line([_h("AAA", 4.0)]) == ""      # no SPY figure -> nothing
+
+
+def test_benchmark_line_ignores_holdings_with_no_benchmark_figure():
+    # one holding priced, one not: report the one we can, not a mixture pretending to be both
+    out = briefing.render_benchmark_line([_h("AAA", 10.0, 2.0), _h("BBB", -50.0)])
+    assert "+10.0%" in out and "+8.0" in out
+
+
+def test_benchmark_line_appears_in_the_rendered_briefing():
+    out = briefing.render_briefing([], [], [], [], "2026-09-09", "neutral", "n",
+                                   holdings=[_h("AAA", -4.0, 2.0)])
+    assert "behind" in out.lower()
+    assert out.index("Your holdings") < out.index("behind")
+
+
+def test_candidate_omits_the_agent_lines_when_no_agent_ran():
+    # With ai_mode: off, every candidate carried two filler lines -- "not AI-analyzed
+    # (rules-only)" x16 on a normal day -- which say nothing and crowd out the signals that
+    # do. A line with no opinion behind it should not be printed.
+    r = _adjudicated("AAA", 88, 80, "not AI-analyzed (rules-only)", "low",
+                     "not AI-analyzed (rules-only; no opinion)", [])
+    out = briefing.render_briefing([r], [], [], [], "2026-09-09", "neutral", "n", holdings=[])
+    assert "not AI-analyzed" not in out
+    assert "AAA" in out                                  # the candidate itself still renders
+
+
+def test_candidate_still_shows_a_real_agent_opinion():
+    r = _adjudicated("AAA", 88, 80, "Landed a big contract", "medium", "earnings in 3 days", [])
+    out = briefing.render_briefing([r], [], [], [], "2026-09-09", "neutral", "n", holdings=[])
+    assert "Landed a big contract" in out
+    assert "earnings in 3 days" in out

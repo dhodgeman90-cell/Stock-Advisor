@@ -51,14 +51,71 @@ def test_technicals_only_when_no_signals():
     assert "technicals only" in verdict.classify(_r(70), buy_threshold=65)["reason"]
 
 
-def test_underperforming_forces_low_confidence():
-    clean_buy = _r(85, [{"key": "catalyst", "points": 15}, {"key": "congress_buy", "points": 18}])
-    assert verdict.classify(clean_buy, buy_threshold=65)["confidence"] == "high"
-    assert verdict.classify(clean_buy, buy_threshold=65,
-                            underperforming=True)["confidence"] == "low"
-
-
 def test_missing_adjustment_detail_does_not_raise():
     # the render tests pass adjudicator dicts without structured detail.
     v = verdict.classify({"final_score": 88, "vetoed": False}, buy_threshold=65)
     assert v["call"] == "Buy" and v["reason"]
+
+
+# ===================== adds_paused must reach the verdict label =====================
+# Measured 2026-09-09: 332 "Buy:" verdicts shipped across every briefing while
+# config/watchlist.yaml carried adds_paused: true. The flag only zeroed the ROTATION adds
+# (main.py:572); the Top Candidates section kept printing "Buy" for eight names a morning.
+# With real money live that is the single most misleading thing the app does.
+
+def test_adds_paused_downgrades_buy_to_candidate():
+    r = _r(85, [{"key": "catalyst", "points": 15}])
+    assert verdict.classify(r, buy_threshold=65)["call"] == "Buy"
+    assert verdict.classify(r, buy_threshold=65, adds_paused=True)["call"] == "Candidate"
+
+
+def test_adds_paused_keeps_the_driver_reason():
+    r = _r(85, [{"key": "congress_buy", "points": 18}])
+    v = verdict.classify(r, buy_threshold=65, adds_paused=True)
+    assert "congressional buying" in v["reason"]
+
+
+def test_adds_paused_does_not_touch_watch_avoid_or_veto():
+    assert verdict.classify(_r(58), buy_threshold=65, adds_paused=True)["call"] == "Watch"
+    assert verdict.classify(_r(40), buy_threshold=65, adds_paused=True)["call"] == "Avoid"
+    v = verdict.classify(_r(90, vetoed=True, veto_reason="fraud probe"),
+                         buy_threshold=65, adds_paused=True)
+    assert v["call"] == "Avoid"
+
+
+def test_adds_paused_still_downgrades_contradictions_to_watch():
+    # a contradiction is a stronger statement than "buys are paused" — Watch must win.
+    v = verdict.classify(
+        _r(100, [{"key": "congress_buy", "points": 18}, {"key": "analyst_bear", "points": -8}]),
+        buy_threshold=65, adds_paused=True)
+    assert v["call"] == "Watch" and v["contradiction"] is True
+
+
+# ===================== confidence must be a MEASURED rate, never an ordinal =====================
+# Measured 2026-09-09: 368 of 368 confidence tags ever printed were "low confidence".
+# "medium"/"high" never printed once, because _confidence short-circuited to "low" whenever
+# `underperforming` was True or None and the system has underperformed continuously. The field
+# was a constant carrying zero information. It is replaced by the realised beat-SPY rate.
+
+def test_confidence_text_reports_the_measured_rate_and_sample_size():
+    txt = verdict.confidence_text({"enough": True, "beat_spy_rate": 45.0, "n_matured": 480})
+    assert "45%" in txt and "480" in txt
+
+
+def test_confidence_text_says_so_when_there_is_no_measured_basis():
+    for summary in (None, {}, {"enough": False, "beat_spy_rate": 80.0, "n_matured": 4}):
+        txt = verdict.confidence_text(summary)
+        assert "no measured" in txt.lower()
+        # it must never imply a rate it cannot support
+        assert "80%" not in txt
+
+
+def test_confidence_text_handles_a_missing_rate_without_inventing_one():
+    txt = verdict.confidence_text({"enough": True, "beat_spy_rate": None, "n_matured": 480})
+    assert "no measured" in txt.lower()
+
+
+def test_no_bare_ordinal_confidence_tag_survives():
+    # the old field is gone; nothing may hand the reader a naked "low/medium/high confidence".
+    v = verdict.classify(_r(85, [{"key": "catalyst", "points": 15}]), buy_threshold=65)
+    assert v.get("confidence") not in ("low", "medium", "high")

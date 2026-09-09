@@ -474,8 +474,28 @@ def _best_preset(core):
 
 
 def _ret_per_dd(ret, dd) -> float:
-    """Return per unit of drawdown (Calmar-style). 0 drawdown -> 0.0 to stay finite."""
-    return ret / abs(dd) if dd else 0.0
+    """Return per unit of drawdown (Calmar-style). 0 drawdown -> 0.0 to stay finite.
+
+    The branch is not decoration. `ret / |dd|` ranks winning periods correctly but INVERTS on
+    losing ones: a bigger denominator pulls a negative number toward zero, so suffering a worse
+    drawdown scores better. Measured on this repo's own 2026-07-27 regime report, overlay ON
+    (-22.9% return, -25.1% drawdown) scored -0.91 against overlay OFF (-37.6%, -42.4%) at
+    -0.89 — ON lost 14.7 points less money with 17.3 points less drawdown and was ranked worse.
+    That figure feeds `calmar`, which decides kill-criterion checks c1 and c4, so two of the
+    four pre-registered checks were being settled by inverted arithmetic.
+
+    For a losing period the honest statement is the opposite one: the loss counts worse in
+    proportion to the drawdown endured. Both branches stay monotone in `ret` and monotone
+    (correctly signed) in `|dd|`, agree at ret = 0, and never cross signs, so any comparison
+    between them still orders properly.
+
+    NOTE: this changes the printed `calmar` for losing periods. It is a correction to the
+    metric, not a re-specification of the gate — the kill criterion itself is untouched.
+    """
+    if not dd:
+        return 0.0
+    d = abs(dd)
+    return ret / d if ret >= 0 else ret * (1 + d / 100.0)
 
 
 def render_enriched_report(core, date_str, label="default", *, years=None, date_range=None,

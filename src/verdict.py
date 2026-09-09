@@ -47,20 +47,31 @@ _CONTRADICTORS = {
 # Watch spans this many points below the buy line; further below is an Avoid.
 _WATCH_BAND = 15
 
+# What a would-be Buy is called while `adds_paused` is set. Measured 2026-09-09: 332 "Buy:"
+# verdicts had shipped across every briefing while buys were nominally paused, because the flag
+# only zeroed the rotation adds. The screen still has an opinion worth showing — it just may not
+# call it a Buy.
+_PAUSED_CALL = "Candidate"
+
 
 def _phrase(key: str) -> str:
     return _PHRASE.get(key, key.replace("_", " "))
 
 
-def classify(r: dict, buy_threshold: float = 65, *, underperforming: bool = False) -> dict:
+def classify(r: dict, buy_threshold: float = 65, *, underperforming: bool = False,
+             adds_paused: bool = False) -> dict:
     """Buy/Watch/Avoid + one plain reason for an adjudicated candidate. Pure.
 
     Degrades gracefully: if `r` carries no structured `adjustment_detail`, the reason falls
     back to a technicals-only note rather than raising.
+
+    `adds_paused` mirrors the live config flag. When buys are withheld the shortlist must not
+    say "Buy" — see the note on _PAUSED_CALL. `underperforming` is accepted and ignored; it
+    fed the old ordinal confidence tag, which is gone (see confidence_text).
     """
     if r.get("vetoed"):
         return {"call": "Avoid", "reason": r.get("veto_reason") or "vetoed on risk",
-                "confidence": "high", "contradiction": False}
+                "confidence": None, "contradiction": False}
 
     score = float(r.get("final_score", 0.0))
     detail = r.get("adjustment_detail") or []
@@ -79,6 +90,11 @@ def classify(r: dict, buy_threshold: float = 65, *, underperforming: bool = Fals
         call = "Watch"
         contradiction = True
 
+    # Buys withheld -> the label must say so. A contradiction already knocked the call down to
+    # Watch above, which is the stronger statement, so only a surviving Buy is relabelled.
+    if call == "Buy" and adds_paused:
+        call = _PAUSED_CALL
+
     if contradiction:
         reason = f"strong score but {_phrase(contradictors[0])} — signals conflict"
     else:
@@ -90,28 +106,28 @@ def classify(r: dict, buy_threshold: float = 65, *, underperforming: bool = Fals
         else:
             reason = f"held back by {_phrase(driver['key'])}"
 
-    return {"call": call, "reason": reason,
-            "confidence": _confidence(score, buy_threshold, len(fired),
-                                      underperforming, contradiction),
+    return {"call": call, "reason": reason, "confidence": None,
             "contradiction": contradiction}
 
 
-def _confidence(score, buy_threshold, n_signals, underperforming, contradiction) -> str:
-    """Coarse confidence tag. Deliberately conservative: the system's own scorecard forces
-    every call down to 'low' when it is underperforming its benchmark, so the briefing never
-    projects false conviction on a record that hasn't earned it.
+def confidence_text(summary) -> str:
+    """The realised beat-SPY rate, or an explicit statement that there isn't one yet.
 
-    `underperforming` is TRI-STATE: True / False / None, where None means the benchmark
-    comparison could not be computed (e.g. the SPY fetch failed). That is an absence of
-    evidence, not evidence of absence, so it caps confidence too — otherwise a data outage
-    silently promotes every pick to medium/high."""
-    if underperforming is None or underperforming or contradiction:
-        return "low"
-    if score >= buy_threshold + 10 and n_signals >= 2:
-        return "high"
-    if score >= buy_threshold:
-        return "medium"
-    return "low"
+    This REPLACES the old ordinal confidence tag. That tag short-circuited to "low" whenever
+    the system was underperforming, and the system has underperformed continuously since it
+    shipped, so all 368 tags ever printed read "low confidence" — a constant carrying zero
+    information, and the specific thing the owner complained about.
+
+    The honest substitute is the frequency actually observed: how often past calls beat SPY,
+    with the sample size attached. Below the maturity floor (`enough`) or with no computable
+    rate it says so in words and quotes no number, because an absent benchmark is an absence
+    of evidence, not a clean bill of health.
+    """
+    summary = summary or {}
+    rate, n = summary.get("beat_spy_rate"), summary.get("n_matured")
+    if not summary.get("enough") or rate is None or not n:
+        return "no measured track record yet"
+    return f"{rate:.0f}% of past calls beat SPY at +5d (n={n})"
 
 
 def demo():
@@ -132,10 +148,14 @@ def demo():
     # veto always Avoid
     assert classify({"vetoed": True, "veto_reason": "fraud probe"}, 65)["call"] == "Avoid"
 
-    # underperforming system forces confidence down even on a clean Buy
+    # buys paused -> the label says Candidate, not Buy, but keeps its reason
     v = classify({"final_score": 85, "adjustment_detail": [{"key": "catalyst", "points": 15}]},
-                 65, underperforming=True)
-    assert v["confidence"] == "low", v
+                 65, adds_paused=True)
+    assert v["call"] == "Candidate" and "news catalyst" in v["reason"], v
+
+    # confidence is a measured rate or an explicit absence — never a bare ordinal
+    assert "45%" in confidence_text({"enough": True, "beat_spy_rate": 45.0, "n_matured": 480})
+    assert "no measured" in confidence_text(None)
     print("verdict.demo OK")
 
 

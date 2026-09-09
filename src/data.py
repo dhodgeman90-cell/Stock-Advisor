@@ -83,9 +83,74 @@ def cache_path(ticker: str, data_dir) -> Path:
     return Path(data_dir) / f"{ticker}.csv"
 
 
+_READJUST_TOLERANCE = 0.005   # max spread in the overlap price ratio that still reads as a
+                              # clean corporate-action re-adjustment (0.5%)
+
+
+def _merge_history(old, new):
+    """Union of two fetches of the same ticker, on the NEW frame's price basis.
+
+    Why this is not a one-line `combine_first`. yfinance is called with auto_adjust=True, so
+    every dividend and split re-adjusts the ENTIRE series retroactively: after a 2:1 split the
+    same historical bar comes back at half the price it was cached at. Concatenating the two
+    would leave a price cliff at the seam and fabricate a -50% return on that date. A
+    re-adjustment is a CONSTANT multiplicative factor, so the median ratio across the overlap
+    recovers it exactly and one bad bar cannot rescale seven years.
+
+    If the ratio is not near-constant across the overlap this is not a re-adjustment, it is bad
+    data — and inventing prices is worse than losing depth, so the fresh frame stands alone.
+    """
+    if old is None or len(old) == 0:
+        return new
+    if new is None or len(new) == 0:
+        return old
+    shared = old.index.intersection(new.index)
+    if len(shared) < 5:
+        # No meaningful overlap to calibrate against — a gap this large means the two frames
+        # may not share a price basis at all, so don't guess.
+        return new
+    ratio = (new.loc[shared, "Close"] / old.loc[shared, "Close"]).replace(
+        [float("inf"), float("-inf")], float("nan")).dropna()
+    if ratio.empty:
+        return new
+    factor = float(ratio.median())
+    spread = float(ratio.quantile(0.75) - ratio.quantile(0.25))
+    if factor <= 0 or spread > _READJUST_TOLERANCE * max(factor, 1e-9):
+        return new
+    keep = old.loc[old.index.difference(new.index)].copy()
+    if len(keep) and abs(factor - 1.0) > 1e-9:
+        for col in OHLC_COLS:
+            if col in keep.columns:
+                keep[col] = keep[col] * factor
+        if "Volume" in keep.columns:
+            keep["Volume"] = keep["Volume"] / factor    # shares move inversely to price
+    out = pd.concat([keep, new]).sort_index()
+    return out[~out.index.duplicated(keep="last")]
+
+
 def save_cache(df, ticker: str, data_dir) -> None:
+    """Write the ticker's history, merged with whatever is already cached.
+
+    The merge is the whole point. This used to be a bare to_csv overwrite, and the daily
+    briefing refetches only lookback_days + WARMUP_DAYS = 300 calendar days, so every morning's
+    run destroyed the ~7 years scripts/fetch_deep_history.py had pulled. Measured 2026-09-09:
+    589 cached CSVs, median 204 bars, and only 3 of 589 with a year of data — which is why
+    scripts/score_panel.py returned an empty panel and scripts/event_study.py could not start.
+    The repo's entire validation toolkit was inoperable because the daily job ate its own input.
+    """
     Path(data_dir).mkdir(parents=True, exist_ok=True)
-    df.to_csv(cache_path(ticker, data_dir))
+    path = cache_path(ticker, data_dir)
+    if path.exists():
+        try:
+            old = pd.read_csv(path, index_col=0, parse_dates=True)
+            merged = _merge_history(old, df)
+            # Belt and braces: a write must never lose depth. If the merge somehow returned
+            # less than we already had, keep what is on disk and leave the fetch for next time.
+            if merged is not None and len(merged) >= len(df):
+                df = merged
+        except Exception:
+            pass          # a corrupt cache must not block today's write
+    df.to_csv(path)
 
 
 def load_cache(ticker: str, data_dir, now=None):

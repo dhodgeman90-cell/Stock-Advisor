@@ -22,9 +22,40 @@ settings:
                                   # let us ask "does analyst upside predict returns AMONG
                                   # BREAKOUT NAMES" and nothing more. These 15 random eligible
                                   # names are the unbiased comparison group. 0 disables.
-  adds_paused: true               # withhold BUY calls pending validation. The sell side
-                                  # (exits/trims on open positions) stays fully live, and
-                                  # candidates are still scored and shown. Set false to resume.
+  adds_paused: true               # withhold BUY calls. The sell side (exits/trims on open
+                                  # positions) stays fully live, and candidates are still
+                                  # scored and shown — labelled "Candidate", never "Buy".
+                                  #
+                                  # NOT "pending validation" any more. Validation happened, six
+                                  # times, most recently 2026-09-09 on ~1,800 daily
+                                  # cross-sections: base_score rank-IC vs forward excess return
+                                  # is -0.005 at 5d, ~zero at every horizon, sign-flipping year
+                                  # to year. There is no edge to switch back on. Leave true.
+
+  quiet_unless_actionable: true   # email ONLY when a holding trips an exit rule.
+                                  # The run still happens every day and the report is still
+                                  # written — the daily signal capture is what makes any of
+                                  # this answerable later. What stops is the daily notification
+                                  # about a screen with no measured edge, which manufactures
+                                  # the urge to act. Turnover is the one thing measured to be
+                                  # monotonically destructive here (+1.9% at 70 trades ->
+                                  # -18.9% at 350). Set false to get the mail every morning.
+
+  ai_mode: off                    # off | measure | live
+                                  # The news/risk/social agents drove 223 of 353 "Buy:" verdicts
+                                  # ever printed and have NEVER been validated in either
+                                  # direction. Unvalidated is not refuted, so they are switched
+                                  # off rather than deleted.
+                                  #
+                                  #   off     — never called, no tokens spent (current)
+                                  #   measure — called and captured to data/ai_history.jsonl,
+                                  #             but given ZERO influence on score, verdict or
+                                  #             page. Costs a few cents a day and is the only
+                                  #             way "does the news agent predict anything?"
+                                  #             ever becomes answerable. Same trick as the
+                                  #             control cohort, which is what made the
+                                  #             2026-09-09 analysis possible at all.
+                                  #   live    — agents score and render (the legacy default)
   # --- both OFF pending Phase 2/3 (2026-07-27 audit) ---
   # entry_model: relative_strength
   #   Re-ranks only INSIDE the 25 names the legacy breakout+volume pre-filter already chose,

@@ -135,3 +135,27 @@ def test_render_regime_report_shows_criteria_and_verdict():
     assert "Kill criterion" in text and "Verdict" in text and "2022 selloff" in text
     assert ("PASS" in text or "FAIL" in text)
     assert "not financial advice" in text.lower()
+
+
+# ---- _ret_per_dd must rank losing periods correctly ----
+# Measured against the numbers in reports/backtest-regime-default-2026-07-27.md: overlay ON
+# returned -22.9% with a -25.1% max drawdown, overlay OFF -37.6% with -42.4%. ON lost 14.7
+# points LESS money with 17.3 points LESS drawdown, yet `ret / abs(dd)` scored it WORSE
+# (-0.912 vs -0.887). That ratio feeds `calmar`, which feeds kill-criterion checks c1 and c4,
+# so two of the four pre-registered checks were being decided by inverted arithmetic.
+
+def test_ret_per_dd_prefers_the_smaller_loss_at_the_smaller_drawdown():
+    better = backtest._ret_per_dd(-22.9, -25.1)     # overlay ON
+    worse = backtest._ret_per_dd(-37.6, -42.4)      # overlay OFF
+    assert better > worse
+
+
+def test_ret_per_dd_penalises_a_deeper_drawdown_for_the_same_return():
+    # losing 5% while enduring a 50% drawdown is strictly worse than losing 5% quietly
+    assert backtest._ret_per_dd(-5.0, -5.0) > backtest._ret_per_dd(-5.0, -50.0)
+
+
+def test_ret_per_dd_still_rewards_return_per_unit_of_pain_when_positive():
+    assert backtest._ret_per_dd(20.0, -10.0) > backtest._ret_per_dd(10.0, -10.0)
+    assert backtest._ret_per_dd(20.0, -10.0) > backtest._ret_per_dd(20.0, -40.0)
+    assert backtest._ret_per_dd(10.0, 0) == 0.0     # no drawdown -> stay finite

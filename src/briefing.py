@@ -58,11 +58,60 @@ def render_holdings_section(holdings, run_date=None) -> str:
     return "\n".join(lines)
 
 
+def render_benchmark_line(holdings) -> str:
+    """'Your positions vs SPY over the same days' — the comparison the briefing never made.
+
+    Holdings were only ever reported as "-3.0% from entry", which answers "did this go up?"
+    The question the owner actually acted on is different: was holding THESE better than
+    holding the index over the same days? Across 528 logged picks the answer was 45%, and
+    nothing on the page said so.
+
+    Equal-weighted across holdings, each measured against SPY over that position's own window,
+    so a name bought last week isn't compared to a year of index return. Holdings with no
+    benchmark figure are skipped rather than mixed in; if none have one, this renders nothing
+    at all rather than implying a comparison it cannot make.
+    """
+    rows = [h for h in (holdings or []) if h.get("spy_pct_from_entry") is not None]
+    if not rows:
+        return ""
+    mine = sum(float(h.get("pct_from_entry") or 0.0) for h in rows) / len(rows)
+    spy = sum(float(h["spy_pct_from_entry"]) for h in rows) / len(rows)
+    gap = mine - spy
+    word = "ahead of" if gap >= 0 else "behind"
+    n = len(rows)
+    return (f"_Your positions: **{mine:+.1f}%** · SPY over the same days: **{spy:+.1f}%** · "
+            f"**{gap:+.1f} pts {word}** the index ({n} position{'s' if n != 1 else ''}, "
+            f"equal-weighted)._")
+
+
+def _strip_md(text: str) -> str:
+    """Markdown emphasis markers out, so the same one sentence can render in the HTML email."""
+    return text.replace("**", "").replace("_", "").strip()
+
+
 def _amount_range(low, high) -> str:
     """Compact dollar range, e.g. '$100k–$250k' or '$50k'."""
     def fmt(v):
         return f"${v / 1000:.0f}k" if v >= 1000 else f"${v:.0f}"
     return fmt(low) if low == high else f"{fmt(low)}–{fmt(high)}"
+
+
+def _agent_lines(r) -> list:
+    """The news/risk lines, but only when an agent actually had an opinion.
+
+    With `ai_mode: off` these rendered as "not AI-analyzed (rules-only)" on every candidate —
+    sixteen lines a morning that say nothing and bury the signals that do. Same for a genuine
+    agent outage. No opinion, no line.
+    """
+    out = []
+    summary = ((r.get("news") or {}).get("summary") or "").strip()
+    if summary and "not AI-analyzed" not in summary and "unavailable" not in summary:
+        out.append(f"📰 {_clip(summary)}")
+    risk = r.get("risk") or {}
+    reason = (risk.get("reason") or "").strip()
+    if reason and "not AI-analyzed" not in reason and "unavailable" not in reason:
+        out.append(f"🚩 risk {risk.get('risk_level', '?')}: {_clip(reason)}")
+    return out
 
 
 def _candidate_insight_lines(r) -> list:
@@ -240,6 +289,63 @@ def _reality_check_html(summary, e) -> str:
             f'{summary["n_matured"]} matured picks.</div>')
 
 
+def _candidates_heading(adds_paused) -> str:
+    """The section title must not promise more than the section delivers.
+
+    Measured 2026-09-09: this list had no measurable stock-selection skill (top-8 vs its own
+    pool, size/vol-neutralised: 5d edge -0.0001, t=-0.00). Calling it "Top candidates" over
+    eight "Buy" labels reads as a ranked forecast. It is a screen result.
+    """
+    return ("## Screen results — buys paused" if adds_paused
+            else "## Screen results — not predictions")
+
+
+def _candidates_standing_note(summary) -> str:
+    """One standing line under the heading carrying the realised record, so the reader never
+    reaches the list without the base rate attached."""
+    return f"_Screen output, not a forecast — {verdict.confidence_text(summary)}._"
+
+
+def _rank_note(r) -> str:
+    """'rank 3 of 64' — today's position in the scored pool.
+
+    Replaces 'score 100/100'. Measured 2026-09-09: 61% of all 528 logged picks were pinned at
+    exactly final_score 100.0 (median 100.0), so the printed score could not tell the eight
+    names on the page apart. A rank always discriminates and does not read as a probability.
+    Falls back to the raw score when the pool position wasn't supplied (older callers/tests).
+    """
+    rank, size = r.get("pool_rank"), r.get("pool_size")
+    if rank and size:
+        return f"rank {rank} of {size}"
+    # Shortlist rows carry final_score; the "other scored" tail carries plain score.
+    score = r.get("final_score", r.get("score"))
+    return f"score {score:.0f}/100" if score is not None else "unranked"
+
+
+def _exposure_note(r) -> str:
+    """' · $275M/d · 36% vol' — the liquidity and volatility this name actually carries.
+
+    Measured over the full ~7-year panel: the top-8 by score sits at a median 0.90x the dollar
+    volume of the pool it was screened from, and is thinner than that pool on 60% of days, in
+    every year from 2020 to 2026 (0.86x-0.97x). breakout(30) + volume(30) quietly prefers
+    thinner names, so the screen carries a small, persistent, uncompensated size tilt that
+    nobody chose. It is modest, so the fix is to show it rather than to start overriding the
+    ranking; a reader can see what they are being handed. Silent when either value is unknown.
+    """
+    dv, vol = r.get("liquidity_usd"), r.get("realized_vol")
+    if dv is None and vol is None:
+        return ""
+    parts = []
+    if dv is not None:
+        if dv >= 1e9:
+            parts.append(f"${dv / 1e9:.1f}B/d")
+        else:
+            parts.append(f"${dv / 1e6:.0f}M/d")
+    if vol is not None:
+        parts.append(f"{vol * 100:.0f}% vol")
+    return " · " + " · ".join(parts)
+
+
 def _thin_data_note(r) -> str:
     """' · thin data (k/7)' when fewer than 3 of the 7 enrichment signals resolved for this
     pick, so a momentum-only score isn't mistaken for a corroborated one. Empty when the count
@@ -251,7 +357,7 @@ def _thin_data_note(r) -> str:
 
 def render_briefing(ranked, vetoed, others, excluded, date_str, regime, regime_note,
                     holdings=None, rotation_plan=None, discovery=None, tone_line=None,
-                    scorecard_summary=None, buy_threshold=65) -> str:
+                    scorecard_summary=None, buy_threshold=65, adds_paused=False) -> str:
     """Render the enriched daily briefing (Phase 2 + Phase 3 holdings + signal upgrade).
 
     `ranked` is pre-sorted by final_score. The rotation plan and holdings lead the
@@ -275,19 +381,23 @@ def render_briefing(ranked, vetoed, others, excluded, date_str, regime, regime_n
         render_rotation_section(rotation_plan),
         "",
         render_holdings_section(holdings, run_date=date_str),
+        render_benchmark_line(holdings),
         "",
-        "## Top candidates",
+        _candidates_heading(adds_paused),
+        _candidates_standing_note(scorecard_summary),
     ]
     if not ranked:
         L.append("_No candidates today._")
     for r in ranked:
-        v = verdict.classify(r, buy_threshold, underperforming=underperforming)
+        v = verdict.classify(r, buy_threshold, underperforming=underperforming,
+                             adds_paused=adds_paused)
+        # The realised base rate leads the section once; repeating it on all eight lines just
+        # buries the per-name detail that actually differs.
         L.append(f"- **{r['ticker']}** — {v['call']}: {v['reason']} "
-                 f"_(score {r['final_score']:.0f}/100 · {v['confidence']} confidence"
-                 f"{_thin_data_note(r)})_")
+                 f"_({_rank_note(r)}{_exposure_note(r)}{_thin_data_note(r)})_")
         # Supporting detail, demoted below the verdict (was a raw 'adj:' math dump).
-        L.append(f"    - 📰 {_clip(r['news']['summary'])}")
-        L.append(f"    - 🚩 risk {r['risk']['risk_level']}: {_clip(r['risk']['reason'])}")
+        for line in _agent_lines(r):
+            L.append(f"    - {line}")
         for line in _candidate_insight_lines(r):
             L.append(f"    - {line}")
 
@@ -301,7 +411,7 @@ def render_briefing(ranked, vetoed, others, excluded, date_str, regime, regime_n
         L.append("")
         L.append("## Other scored (below shortlist)")
         for o in others:
-            L.append(f"- {o['ticker']}: {o['score']:.0f}/100")
+            L.append(f"- {o['ticker']}: {_rank_note(o)}")
 
     if excluded:
         L.append("")
@@ -372,15 +482,18 @@ def _holdings_html(holdings, e, run_date=None) -> str:
 
 # (background, foreground) for the Buy/Watch/Avoid verdict pill.
 _VERDICT_COLORS = {
-    "Buy":   ("#dcfce7", "#166534"),   # green
-    "Watch": ("#fef9c3", "#854d0e"),   # amber
-    "Avoid": ("#fee2e2", "#991b1b"),   # red
+    "Buy":       ("#dcfce7", "#166534"),   # green
+    "Candidate": ("#e0e7ff", "#3730a3"),   # indigo — a screen hit while buys are paused
+    "Watch":     ("#fef9c3", "#854d0e"),   # amber
+    "Avoid":     ("#fee2e2", "#991b1b"),   # red
 }
 
 
-def _candidate_card_html(r, e, green, buy_threshold=65, underperforming=False) -> str:
+def _candidate_card_html(r, e, green, buy_threshold=65, underperforming=False,
+                         adds_paused=False) -> str:
     """Left-bordered card: one clear verdict up top, the raw signal detail collapsed below."""
-    v = verdict.classify(r, buy_threshold, underperforming=underperforming)
+    v = verdict.classify(r, buy_threshold, underperforming=underperforming,
+                         adds_paused=adds_paused)
     bg, fg = _VERDICT_COLORS.get(v["call"], _VERDICT_COLORS["Watch"])
     insight_html = "".join(
         f'<div style="font-size:12px;color:#4b5563;margin-top:2px;">{e(line)}</div>'
@@ -389,10 +502,9 @@ def _candidate_card_html(r, e, green, buy_threshold=65, underperforming=False) -
     details = (
         '<details style="margin-top:6px;">'
         '<summary style="font-size:11px;color:#9ca3af;cursor:pointer;">details</summary>'
-        f'<div style="font-size:12.5px;color:#4b5563;margin-top:4px;">📰 {e(_clip(r["news"]["summary"]))}</div>'
-        f'<div style="font-size:12.5px;color:#4b5563;">🚩 risk {e(r["risk"]["risk_level"])}: '
-        f'{e(_clip(r["risk"]["reason"]))}</div>'
-        f'{insight_html}</details>'
+        + "".join(f'<div style="font-size:12.5px;color:#4b5563;margin-top:2px;">{e(line)}</div>'
+                  for line in _agent_lines(r))
+        + f'{insight_html}</details>'
     )
     return (
         f'<div style="border-left:3px solid {green};background:#f7faf8;'
@@ -402,7 +514,7 @@ def _candidate_card_html(r, e, green, buy_threshold=65, underperforming=False) -
         f'font-size:11.5px;font-weight:700;">{e(v["call"])}</span> '
         f'<span style="color:#4b5563;font-size:12.5px;">{e(v["reason"])}</span></div>'
         f'<div style="font-size:11px;color:#9ca3af;margin-top:3px;">'
-        f'score {r["final_score"]:.0f}/100 · {e(v["confidence"])} confidence{_thin_data_note(r)}</div>'
+        f'{e(_rank_note(r))}{e(_exposure_note(r))}{_thin_data_note(r)}</div>'
         f'{details}</div>'
     )
 
@@ -458,7 +570,8 @@ def _discovery_html(congress_movers, wsb_movers, e) -> str:
 
 def render_briefing_html(ranked, vetoed, others, excluded, date_str, regime,
                          regime_note, holdings=None, rotation_plan=None, discovery=None,
-                         tone_line=None, scorecard_summary=None, buy_threshold=65) -> str:
+                         tone_line=None, scorecard_summary=None, buy_threshold=65,
+                         adds_paused=False) -> str:
     """Styled HTML version of the daily briefing (plain-text fallback stays render_briefing)."""
     e = html.escape
     green = "#0f3d2e"
@@ -480,11 +593,17 @@ def render_briefing_html(ranked, vetoed, others, excluded, date_str, regime,
         '<div style="font-size:14px;font-weight:700;color:#0f172a;margin:18px 0 10px;">'
         '📊 Your holdings</div>',
         _holdings_html(holdings or [], e, date_str),
-        '<div style="font-size:14px;font-weight:700;color:#0f172a;margin:20px 0 10px;">'
-        'Top candidates</div>',
+        (f'<div style="font-size:11.5px;color:#4b5563;margin-top:6px;">'
+         f'{e(_strip_md(render_benchmark_line(holdings)))}</div>'
+         if render_benchmark_line(holdings) else ''),
+        '<div style="font-size:14px;font-weight:700;color:#0f172a;margin:20px 0 4px;">'
+        f'{e(_candidates_heading(adds_paused).lstrip("# "))}</div>',
+        '<div style="font-size:11px;color:#6b7280;margin-bottom:10px;">'
+        f'Screen output, not a forecast — {e(verdict.confidence_text(scorecard_summary))}.</div>',
     ]
     if ranked:
-        P.extend(_candidate_card_html(r, e, green, buy_threshold, underperforming)
+        P.extend(_candidate_card_html(r, e, green, buy_threshold, underperforming,
+                                      adds_paused=adds_paused)
                  for r in ranked)
     else:
         P.append('<div style="font-size:12.5px;color:#6b7280;">No candidates today.</div>')

@@ -121,7 +121,7 @@ def _seed_min_config(cfg):
         "weights:\n  breakout: 30\n  volume: 30\n  momentum: 20\n  trend: 15\n  pullback: 5\n",
         encoding="utf-8")
     (cfg / "adjudicator.yaml").write_text(
-        "caps:\n  catalyst: 15\n  news_neg: 10\n  risk_high: 20\n  social: 8\n",
+        "caps:\n  catalyst: 15\n  news_neg: 10\n  risk_high: 20\n  social: 8\n  regime: 5\n",
         encoding="utf-8")
     (cfg / "exits.yaml").write_text(
         "defaults:\n  stop_loss_pct: 8\n  take_profit_pct: 20\n"
@@ -254,6 +254,16 @@ def test_adds_paused_suppresses_every_buy_but_keeps_exit_advice(tmp_path, monkey
     assert res.rotation_plan["adds"] == []
     assert "adds" in res.rotation_plan and "exits" in res.rotation_plan
     assert res.ranked, "candidates are still scored and shown — only the BUY call is withheld"
+
+    # The leak this closes: for months the flag zeroed only the rotation adds, while the
+    # candidate section kept printing "Buy" for eight names a morning (332 such verdicts
+    # shipped). The rendered report must not say Buy anywhere while buys are paused.
+    assert "— Buy:" not in res.text
+    assert "Candidate:" in res.text or "Watch:" in res.text or "Avoid:" in res.text
+    assert "buys paused" in res.text.lower()
+    assert "confidence" not in res.text.lower()   # the constant ordinal tag is gone
+    # and the HTML email must not disagree with the markdown
+    assert ">Buy<" not in res.html
 
 
 # ---- control cohort: unbiased signal capture ----
@@ -449,8 +459,12 @@ def test_no_ai_run_labels_candidates_rules_only_not_unavailable(tmp_path, monkey
 
     result = main.run(profile=profile, force=True, fetch=fake_fetch)
 
+    # The original intent — never show "news agent unavailable" for an INTENTIONAL skip — still
+    # holds, and is now stronger: a line with no opinion behind it isn't printed at all. With
+    # ai_mode off this was 16 lines of "not AI-analyzed (rules-only)" filler a morning.
     assert "news agent unavailable" not in result.text
-    assert "rules-only" in result.text
+    assert "rules-only" not in result.text
+    assert result.ranked, "candidates still render — only the empty agent lines are gone"
 
 
 def test_skipped_views_score_identically_to_neutral_views():
@@ -511,3 +525,128 @@ def test_objective_changes_effective_weights(tmp_path, monkeypatch):
     main.run(profile=p, force=True, fetch=_fake_fetch)
     assert seen["weights"]["trend"] == 10        # aggressive preset, not the seeded 15
     assert seen["weights"]["pullback"] == 0
+
+
+# ---- ai_mode: off / measure / live ----
+# The three AI agents (news, risk, social) drove 223 of 353 "Buy:" verdicts across every
+# briefing ever produced and have NEVER been validated in either direction. They are
+# unvalidated, not refuted -- so they get switched off, not deleted, and `measure` exists so
+# the question can eventually be answered instead of closed.
+
+def _ai_run(tmp_path, monkeypatch, mode, counter):
+    from src import agents as ag, llm as llm_mod
+    from tests.fakes import FakeClient
+    # main does `from src import llm` inside run(), so patch the module itself.
+    monkeypatch.setattr(llm_mod, "AnthropicClient", lambda *a, **k: FakeClient("x"))
+
+    def _news(client, ticker, headlines):
+        counter.append(("news", ticker))
+        return {"summary": "AI SAYS BUY THIS", "catalyst": True, "negative": False}
+
+    def _risk(client, ticker, closes, headlines):
+        counter.append(("risk", ticker))
+        return {"risk_level": "low", "reason": "AI SAYS SAFE", "veto": False}
+
+    monkeypatch.setattr(ag, "news_agent", _news)
+    monkeypatch.setattr(ag, "risk_agent", _risk)
+    monkeypatch.setattr(ag, "context_agent",
+                        lambda c, s: {"regime": "risk_on", "note": "AI REGIME NOTE"})
+    cfg = tmp_path / "config"
+    _seed_min_config(cfg)
+    mode_line = "" if mode is None else f"  ai_mode: {mode}\n"
+    (cfg / "watchlist.yaml").write_text(
+        "tickers:\n  - AAA\nsettings:\n  lookback_days: 120\n  shortlist_size: 2\n"
+        + mode_line, encoding="utf-8")
+    monkeypatch.setattr(main.social, "get_wsb_sentiment", lambda **kw: {})
+    monkeypatch.setattr(main.congress, "get_congress_trades", lambda **kw: [])
+    monkeypatch.setattr(main.congress, "aggregate_by_ticker", lambda trades: {})
+    monkeypatch.setattr(main.market, "get_market_breadth",
+                        lambda: {"regime": "neutral", "regime_hint": "VIX calm"})
+    monkeypatch.setattr(main.insights, "get_insider_signal", lambda t: None)
+    monkeypatch.setattr(main.insights, "get_analyst_signal", lambda t: None)
+    monkeypatch.setattr(main.insights, "get_earnings", lambda t: None)
+    _stub_signal_feeds(monkeypatch)
+    monkeypatch.setattr(main.news, "get_headlines", lambda t: ["a headline"])
+    profile = Profile(config_dir=cfg, data_dir=tmp_path / "data",
+                      reports_dir=tmp_path / "reports",
+                      secrets=EnvSecrets(values={"ANTHROPIC_API_KEY": "sk-test"}))
+    return main.run(profile=profile, force=True, fetch=lambda t, lb: _buyable_df())
+
+
+def test_ai_mode_off_never_calls_an_agent_even_with_a_key(tmp_path, monkeypatch):
+    calls = []
+    res = _ai_run(tmp_path, monkeypatch, "off", calls)
+    assert calls == [], "off must not spend a token"
+    assert "AI SAYS BUY THIS" not in res.text
+
+
+def test_ai_mode_measure_runs_the_agents_but_they_cannot_reach_the_page(tmp_path, monkeypatch):
+    calls = []
+    res = _ai_run(tmp_path, monkeypatch, "measure", calls)
+    assert calls, "measure must actually call the agents — that's the point"
+    assert "AI SAYS BUY THIS" not in res.text     # never rendered
+    assert "AI SAYS SAFE" not in res.text
+    assert "AI REGIME NOTE" not in res.text       # nor allowed to set the regime
+
+
+def test_ai_mode_measure_scores_identically_to_off(tmp_path, monkeypatch):
+    # The whole guarantee: turning measurement on must not move a single score.
+    off = _ai_run(tmp_path / "a", monkeypatch, "off", [])
+    meas = _ai_run(tmp_path / "b", monkeypatch, "measure", [])
+    assert [r["ticker"] for r in off.ranked] == [r["ticker"] for r in meas.ranked]
+    assert ([round(r["final_score"], 6) for r in off.ranked]
+            == [round(r["final_score"], 6) for r in meas.ranked])
+
+
+def test_ai_mode_measure_captures_the_agent_output_for_later_study(tmp_path, monkeypatch):
+    from src import signal_log
+    _ai_run(tmp_path, monkeypatch, "measure", [])
+    rows = signal_log.load_ai(tmp_path / "data")
+    assert rows, "measure must persist what the agents said, or it measures nothing"
+    r = rows[0]
+    assert r["ticker"] == "AAA" and r["date"]
+    assert r["news"]["summary"] == "AI SAYS BUY THIS"
+    assert r["risk"]["risk_level"] == "low"
+
+
+def test_ai_mode_live_still_lets_the_agents_through(tmp_path, monkeypatch):
+    calls = []
+    res = _ai_run(tmp_path, monkeypatch, "live", calls)
+    assert calls
+    assert "AI SAYS BUY THIS" in res.text        # unchanged legacy behaviour
+
+
+def test_ai_mode_defaults_to_live_when_unset(tmp_path, monkeypatch):
+    # Not a silent behaviour change: with no ai_mode key at all the agents still run and score,
+    # exactly as before. config/watchlist.yaml opts THIS install out explicitly instead.
+    calls = []
+    res = _ai_run(tmp_path, monkeypatch, None, calls)
+    assert calls, "an install that never heard of ai_mode must behave as it always did"
+    assert "AI SAYS BUY THIS" in res.text
+
+
+# ---- quiet_unless_actionable: keep capturing daily, stop notifying daily ----
+# Turnover is the one thing measured to be monotonically destructive here (+1.9% at 70 trades
+# -> -18.9% at 350). A daily email about a screen with no measured edge manufactures the urge
+# to act. The RUN still happens every day -- the signal capture is what made the 2026-09-09
+# analysis possible -- only the notification is gated on there being something to do.
+
+def test_actionability_is_driven_by_exit_signals_not_by_the_screen():
+    holdings = [{"ticker": "AAA", "signals": [{"type": "stop_loss", "level": "sell"}]}]
+    assert main._worth_notifying(holdings, quiet=True) is True
+    assert main._worth_notifying([{"ticker": "AAA", "signals": []}], quiet=True) is False
+    # a fresh pick list is NOT a reason to email; the screen has no measured edge
+    assert main._worth_notifying([], quiet=True) is False
+
+
+def test_quiet_mode_off_always_notifies():
+    assert main._worth_notifying([{"ticker": "AAA", "signals": []}], quiet=False) is True
+    assert main._worth_notifying([], quiet=False) is True
+
+
+def test_quiet_mode_still_writes_the_report_and_captures_signals(tmp_path, monkeypatch):
+    res = _offline_run(tmp_path, monkeypatch,
+                       extra_settings="  quiet_unless_actionable: true\n")
+    assert res.report_path is not None and res.report_path.exists()
+    from src import signal_log
+    assert signal_log.load_signals(tmp_path / "data"), "capture must continue every day"
