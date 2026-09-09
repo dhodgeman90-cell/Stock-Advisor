@@ -1,6 +1,7 @@
 import datetime as dt
 
 import pandas as pd
+import pytest
 
 from src import data
 from tests.helpers import make_df
@@ -130,3 +131,69 @@ def test_window_bounds_honors_days_plus_warmup():
     start, end = data._window_bounds(730, today=today, warmup=100)
     assert start == "2024-02-29"          # 2026-06-08 minus 830 days (730 + 100 warmup)
     assert end == "2026-06-09"            # today + 1 day (yfinance end is exclusive)
+
+
+# ================== save_cache must never shrink the history ==================
+# Root cause of "no backtest in this repo can measure the strategy that actually runs":
+# save_cache was a plain df.to_csv() overwrite, and the daily run refetches only
+# lookback_days(200) + WARMUP_DAYS(100) = 300 calendar days. So every morning's briefing
+# destroyed the 7 years scripts/fetch_deep_history.py had pulled. Measured 2026-09-09:
+# 589 cached CSVs, median 204 bars, only 3 of 589 with >= 252. score_panel.load_panel
+# (min_bars=800) returned an empty panel and event_study.py could not start.
+
+def _span(start, periods, price, volume=1_000_000):
+    idx = pd.date_range(start, periods=periods, freq="D")
+    return pd.DataFrame({"Open": price, "High": price, "Low": price, "Close": price,
+                         "Volume": volume}, index=idx)
+
+
+def test_a_short_refetch_does_not_destroy_the_deep_history(tmp_path):
+    deep = _span("2020-01-01", 800, 100.0)
+    data.save_cache(deep, "AAA", tmp_path)
+    fresh = _span("2022-02-14", 300, 100.0)          # the daily 300-day window
+    data.save_cache(fresh, "AAA", tmp_path)
+    out = data.load_cache("AAA", tmp_path)
+    assert len(out) >= 800, "the daily run must never shrink the cache"
+    assert out.index[0] == deep.index[0]             # the old head survives
+    assert out.index[-1] == fresh.index[-1]          # and the new tail lands
+
+
+def test_new_bars_are_appended_and_overlapping_dates_prefer_the_fresh_values(tmp_path):
+    data.save_cache(_span("2024-01-01", 100, 10.0), "AAA", tmp_path)
+    data.save_cache(_span("2024-03-11", 100, 11.0), "AAA", tmp_path)   # overlaps + extends
+    out = data.load_cache("AAA", tmp_path)
+    assert len(out) == 170
+    assert float(out["Close"].iloc[-1]) == 11.0
+    assert float(out["Close"].loc["2024-03-11"]) == 11.0   # fresh wins on a shared date
+
+
+def test_a_split_readjustment_is_rescaled_instead_of_spliced_into_a_fake_gap(tmp_path):
+    # yfinance fetches with auto_adjust=True, so a 2:1 split re-adjusts the ENTIRE series.
+    # Naively keeping the old rows would leave a 2x price cliff at the seam and fabricate a
+    # -50% return. The old tail must be rescaled onto the new basis instead.
+    data.save_cache(_span("2024-01-01", 400, 100.0, volume=1_000_000), "AAA", tmp_path)
+    post_split = _span("2024-11-26", 200, 50.0, volume=2_000_000)     # every price halved
+    data.save_cache(post_split, "AAA", tmp_path)
+    out = data.load_cache("AAA", tmp_path)
+    assert len(out) >= 400
+    closes = out["Close"]
+    assert float(closes.iloc[0]) == pytest.approx(50.0)      # old head rescaled onto the new basis
+    assert float(closes.max()) == pytest.approx(50.0)        # and no cliff anywhere
+    assert float(out["Volume"].iloc[0]) == pytest.approx(2_000_000)   # volume scales inversely
+
+
+def test_an_incoherent_overlap_keeps_the_fresh_frame_rather_than_guessing(tmp_path):
+    # If the overlap does not agree on a single constant ratio, this is not a re-adjustment --
+    # it is bad data. Splicing anyway would invent prices, so the fresh frame stands alone.
+    data.save_cache(_span("2024-01-01", 200, 100.0), "AAA", tmp_path)
+    noisy = _span("2024-05-20", 200, 100.0)
+    noisy.loc[noisy.index[:40], ["Open", "High", "Low", "Close"]] = 5.0    # nonsense overlap
+    data.save_cache(noisy, "AAA", tmp_path)
+    out = data.load_cache("AAA", tmp_path)
+    assert out.index[0] == noisy.index[0]      # no fabricated history
+    assert len(out) == len(noisy)
+
+
+def test_saving_into_an_empty_directory_still_works(tmp_path):
+    data.save_cache(_span("2024-01-01", 60, 10.0), "NEW", tmp_path)
+    assert len(data.load_cache("NEW", tmp_path)) == 60

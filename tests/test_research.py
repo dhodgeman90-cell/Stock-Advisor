@@ -221,3 +221,56 @@ def test_forward_panel_survives_a_ticker_with_no_cached_prices(tmp_path):
 
     rows = research.forward_panel(tmp_path, horizons=(5,))
     assert [r["ticker"] for r in rows] == ["AAA"]
+
+
+# ============================== panel_ic (long-history test) ==============================
+# The 6-week signal_history window put base_score at 5d IC -0.078. The same test on the
+# restored ~7-year price panel (1,773 daily cross-sections) puts it at -0.0049. The short
+# window overstated the effect ~16x. panel_ic is what makes the well-powered version routine.
+
+def _panels(n_dates=400, n_names=60, informative=False):
+    import numpy as np
+    import pandas as pd
+    idx = pd.date_range("2020-01-01", periods=n_dates, freq="B")
+    cols = [f"T{i}" for i in range(n_names)]
+    rng = np.random.default_rng(0)
+    scores = pd.DataFrame(rng.random((n_dates, n_names)) * 100, index=idx, columns=cols)
+    if informative:
+        # tomorrow's return is the score -> IC must come back ~1
+        step = 1.0 + scores.shift(1).fillna(50.0) / 10000.0
+        closes = step.cumprod() * 100.0
+    else:
+        closes = pd.DataFrame(
+            100.0 * np.cumprod(1 + rng.normal(0, 0.01, (n_dates, n_names)), axis=0),
+            index=idx, columns=cols)
+    bench = pd.Series(100.0, index=idx)
+    return scores, closes, bench
+
+
+def test_panel_ic_recovers_a_signal_that_really_does_predict():
+    scores, closes, bench = _panels(informative=True)
+    out = research.panel_ic(scores, closes, bench, horizons=(1,))
+    assert out[1]["ic"] > 0.9
+    assert out[1]["n_days"] > 300
+
+
+def test_panel_ic_reports_about_zero_for_a_signal_that_does_not():
+    scores, closes, bench = _panels(informative=False)
+    out = research.panel_ic(scores, closes, bench, horizons=(5,))
+    assert abs(out[5]["ic"]) < 0.05          # noise in, noise out
+    assert out[5]["n_days"] > 300
+
+
+def test_panel_ic_splits_by_year_so_a_one_window_artefact_is_visible():
+    scores, closes, bench = _panels(informative=True)
+    out = research.panel_ic(scores, closes, bench, horizons=(1,), by_year=True)
+    years = out[1]["by_year"]
+    assert set(years) >= {2020, 2021}
+    assert all(v["ic"] > 0.9 for v in years.values())
+
+
+def test_panel_ic_ignores_days_with_too_thin_a_cross_section():
+    scores, closes, bench = _panels(informative=True)
+    scores.iloc[:50, 5:] = float("nan")      # 50 days with only 5 scored names
+    out = research.panel_ic(scores, closes, bench, horizons=(1,), min_names=30)
+    assert out[1]["n_days"] < len(scores) - 49

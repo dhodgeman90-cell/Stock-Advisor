@@ -319,6 +319,79 @@ def cohort_contrast(rows, horizon, *, min_names=5):
             "diff": mean, "t": t, "n_days": len(diffs)}
 
 
+# ============================== long-history panel IC ==============================
+
+def panel_ic(scores, closes, bench, horizons=(5, 10, 21, 63), *, min_names=30, by_year=False):
+    """Rank IC of a wide (dates x tickers) score panel against forward excess returns.
+
+    `rank_ic` above answers the question for the six weeks of captured enrichment signals.
+    This answers it for anything computable from price history alone — which, once
+    `data.save_cache` stopped destroying the deep cache, means ~7 years and roughly 1,800 daily
+    cross-sections instead of 25.
+
+    That difference is not cosmetic. On the six-week window the app's own `base_score` measured
+    5d IC -0.078, and the tempting conclusion was that the score is inverted. On the full panel
+    it measures -0.0049 with t=-0.67, flipping sign year to year (-0.104, -0.034, -0.011,
+    +0.009, -0.004, +0.032, -0.010, -0.011). The short window overstated the effect roughly
+    16-fold. The score is not inverted; it carries no information. Anything fitted to the short
+    window would have been fitted to that 16x.
+
+    `scores` and `closes` share an index and columns; `bench` is a Series on the same index.
+    Returns {horizon: {ic, t, n_days, hit_rate, by_year}}.
+    """
+    import pandas as pd
+
+    out = {}
+    for h in horizons:
+        fwd = closes.shift(-h) / closes - 1.0
+        excess = fwd.sub(bench.shift(-h) / bench - 1.0, axis=0)
+        usable = scores.notna() & excess.notna()
+        counts = usable.sum(axis=1)
+        sr = scores.where(usable).rank(axis=1)
+        er = excess.where(usable).rank(axis=1)
+        ic = sr.corrwith(er, axis=1)[counts >= min_names].dropna()
+        if ic.empty:
+            out[h] = {"ic": None, "t": None, "n_days": 0, "hit_rate": None, "by_year": {}}
+            continue
+        mean, t = newey_west(list(ic.values), h)
+        years = {}
+        if by_year:
+            for y, g in ic.groupby(ic.index.year):
+                if len(g) < 40:
+                    continue          # a part-year is not a year; don't dress it up as one
+                m, tt = newey_west(list(g.values), h)
+                years[int(y)] = {"ic": m, "t": tt, "n_days": len(g),
+                                 "hit_rate": float((g > 0).mean())}
+        out[h] = {"ic": mean, "t": t, "n_days": len(ic),
+                  "hit_rate": float((ic > 0).mean()), "by_year": years}
+    return out
+
+
+def _load_price_panel(data_dir="data", min_bars=800):
+    """(scores, closes, bench) from the cached CSVs, using the verified vectorised scorer.
+
+    scripts/score_panel.py already recomputes scoring.score_ticker across the whole panel and
+    ships a verify() that asserts it matches the real scorer on random (ticker, date) pairs.
+    Imported lazily and only from the CLI so src/ keeps no standing dependency on scripts/.
+    """
+    import sys
+    from pathlib import Path as _P
+
+    import pandas as pd
+
+    root = _P(__file__).resolve().parent.parent
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    from scripts import score_panel                      # noqa: E402
+
+    C, V = score_panel.load_panel(str(data_dir), min_bars=min_bars)
+    if C.empty:
+        return None, None, None
+    bench_df = pd.read_csv(_P(data_dir) / f"{BENCHMARK}.csv", index_col=0, parse_dates=True)
+    bench = bench_df["Close"].reindex(C.index).ffill()
+    return score_panel.panel_scores(C, V), C, bench
+
+
 # ============================== CLI ==============================
 
 _REPORT_SIGNALS = [
@@ -361,6 +434,34 @@ def report(data_dir="data", horizons=(5, 10, 21)):
                        f"n_days={a['n_days']}")
     out += ["", "A t-stat rests on n_days OVERLAPPING cross-sections. Below ~20 of them, read",
             "the point estimate and ignore the t. This window cannot fit weights — only falsify."]
+    out += ["", "=" * 72,
+            "THE SAME QUESTION ON ~7 YEARS OF PRICE HISTORY (the well-powered version)",
+            "=" * 72]
+    out.append(panel_report(data_dir))
+    return "\n".join(out)
+
+
+def panel_report(data_dir="data", horizons=(5, 10, 21, 63)):
+    """base_score's IC over the full cached history, with a per-year stability check."""
+    scores, closes, bench = _load_price_panel(data_dir)
+    if scores is None:
+        return ("no deep price panel — run scripts/fetch_deep_history.py "
+                "(and note that before the save_cache fix, the daily run deleted it again).")
+    res = panel_ic(scores, closes, bench, horizons=horizons, by_year=True)
+    out = [f"panel: {closes.shape[0]} dates x {closes.shape[1]} tickers, "
+           f"{closes.index[0].date()} .. {closes.index[-1].date()}", "",
+           f"  {'horizon':<8} {'mean IC':>10} {'NW t':>8} {'n_days':>8} {'IC>0':>7}"]
+    for h in horizons:
+        r = res[h]
+        out.append(f"  {str(h) + 'd':<8} {_fmt(r['ic'], places=4):>10} "
+                   f"{_fmt(r['t'], places=2):>8} {r['n_days']:>8} "
+                   f"{(r['hit_rate'] or 0) * 100:>6.0f}%")
+    primary = res.get(21) or {}
+    if primary.get("by_year"):
+        out += ["", "  Per year at 21d — a real effect does not flip sign every year:"]
+        for y, v in sorted(primary["by_year"].items()):
+            out.append(f"    {y}  IC {_fmt(v['ic'], places=4)}  n_days={v['n_days']:>3}  "
+                       f"IC>0 on {v['hit_rate'] * 100:.0f}% of days")
     return "\n".join(out)
 
 
