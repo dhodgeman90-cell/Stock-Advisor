@@ -32,6 +32,32 @@ def _ranked():
     ]
 
 
+def test_ledger_records_which_bar_the_decision_was_made_from(tmp_path):
+    """Without this the ledger cannot be graded correctly, and never could be.
+
+    Classifying all 528 live picks by what `entry_close` actually equals: 33% match the PRIOR
+    bar's close (run before the open), 9% match the SAME date's close (run after the close),
+    37% match neither, and 21% are unjoinable. grade_pick anchors on the pick DATE regardless,
+    so every headline number the owner has read averages over three different entry
+    conventions. `bar_date` removes the ambiguity at the source: it is the last complete bar
+    the scorer actually saw, so grading can anchor on the decision, not on the calendar.
+    """
+    df = make_df([10.0, 11.0, 12.5])                 # last bar is 2024-01-03
+    picks.log_picks([{"ticker": "AAA", "final_score": 88.0, "base_score": 70.0}],
+                    {"AAA": df}, tmp_path, "2026-06-08")
+    rec = picks.load_picks(tmp_path)[0]
+    assert rec["bar_date"] == "2024-01-03"
+    assert rec["entry_close"] == 12.5                # the close OF that bar, consistently
+    assert rec["run_at"].endswith("Z") and "T" in rec["run_at"]
+
+
+def test_bar_date_is_none_when_there_is_no_frame_rather_than_guessing(tmp_path):
+    picks.log_picks([{"ticker": "AAA", "final_score": 88.0, "base_score": 70.0}],
+                    {}, tmp_path, "2026-06-08")
+    rec = picks.load_picks(tmp_path)[0]
+    assert rec["bar_date"] is None and rec["entry_close"] is None
+
+
 def test_ledger_records_the_ordering_score_not_just_the_clamped_one(tmp_path):
     # final_score is clamped to 100 and 61% of the live ledger pins there, so it cannot
     # reconstruct the ranking. rank_score (what main.py actually sorts on) and the pool

@@ -8,6 +8,7 @@ schema/migration, stdlib `json` only.
 """
 from __future__ import annotations
 
+import datetime as dt
 import json
 from pathlib import Path
 
@@ -61,6 +62,25 @@ def _entry_close(df):
         return None
 
 
+def _bar_date(df):
+    """ISO date of the LAST COMPLETE BAR the scorer actually saw, or None.
+
+    This is the anchor the scorecard needs and never had. `date` is the calendar day the run
+    happened, which is not the same thing: data._drop_incomplete withholds a bar whose session
+    is still open, so a pre-open run scores off yesterday's bar while a post-close run scores
+    off today's. Classifying all 528 live picks by what entry_close equals found 33% matching
+    the prior bar, 9% matching the same date, and 37% matching neither — three entry conventions
+    averaged together in every published beat-rate. Recording the bar removes the guesswork
+    going forward; nothing can recover it for the rows already written.
+    """
+    if df is None or len(df) == 0:
+        return None
+    try:
+        return df.index[-1].strftime("%Y-%m-%d")
+    except Exception:
+        return None
+
+
 def append_records(records: list[dict], data_dir) -> int:
     """Append records whose (date,ticker,source) isn't already in the ledger. Returns
     the number actually written. The shared write path for both live logging and the
@@ -87,11 +107,16 @@ def log_picks(ranked, df_by_ticker, data_dir, date_str, *, source="briefing") ->
     `ranked` are the adjudicated buy-candidate dicts (already vetoes-removed) from a run;
     `df_by_ticker` maps ticker -> the OHLCV frame whose last close is that day's price.
     """
+    run_at = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     records = []
     for r in ranked:
         ticker = r["ticker"]
+        df = df_by_ticker.get(ticker)
         records.append({
             "date": date_str,
+            # When the run happened (UTC) and which bar it scored off. See _bar_date.
+            "run_at": run_at,
+            "bar_date": _bar_date(df),
             "ticker": ticker,
             "final_score": round(float(r["final_score"]), 1),
             # rank_score is what actually ORDERED the shortlist (main.py sorts on it), while
@@ -104,7 +129,7 @@ def log_picks(ranked, df_by_ticker, data_dir, date_str, *, source="briefing") ->
             "pool_size": r.get("pool_size"),
             "base_score": round(float(r.get("base_score", r["final_score"])), 1),
             "conviction": rotation._add_conviction(r),
-            "entry_close": _entry_close(df_by_ticker.get(ticker)),
+            "entry_close": _entry_close(df),
             # Which adjudicator caps fired on this pick, for per-signal scorecard
             # attribution. Empty for report-backfilled picks (the .md has no detail).
             "signals": [d.get("key") for d in (r.get("adjustment_detail") or []) if d.get("key")],

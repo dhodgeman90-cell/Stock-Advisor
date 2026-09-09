@@ -83,3 +83,13 @@ def test_unserializable_values_do_not_break_the_run(tmp_path):
     n = signal_log.log_signals(rows, tmp_path, "2026-07-28")
     assert n == 1
     assert isinstance(signal_log.load_signals(tmp_path)[0]["signals"]["analyst"], str)
+
+
+def test_capture_records_when_the_run_happened(tmp_path):
+    """`date` cannot distinguish a pre-open run from a post-close one, and
+    data._drop_incomplete makes that the difference between scoring off yesterday's bar and
+    today's. Without the wall-clock, a forward-return study anchored on `date` silently mixes
+    entry conventions — which is exactly what happened to the 528-row pick ledger."""
+    signal_log.log_signals(_rows("AAA"), tmp_path, "2026-09-09")
+    rec = signal_log.load_signals(tmp_path)[0]
+    assert rec["run_at"].endswith("Z") and "T" in rec["run_at"]

@@ -15,6 +15,7 @@ One record per (date, ticker) over the enriched shortlist — not just the displ
 the cross-section is ~25 wide instead of 8. Idempotent like picks.append_records. Every
 failure path is swallowed by the caller: a logging hiccup must never break the briefing.
 """
+import datetime as dt
 import json
 from pathlib import Path
 
@@ -61,11 +62,18 @@ def log_signals(cand_rows, data_dir, date_str, *, context=None, cohort="candidat
                     inference possible at all.
     """
     existing = {_key(r) for r in load_signals(data_dir)}
+    run_at = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     lines = []
     for row in cand_rows:
         scored, sigs, projected = row[0], row[1], row[2]
         rec = {
             "date": date_str,
+            # Wall-clock of the capture (UTC). `date` alone cannot say whether the run happened
+            # before the open or after the close, and data._drop_incomplete makes that the
+            # difference between scoring off yesterday's bar and today's — so a study that
+            # anchors forward returns on `date` is silently mixing entry conventions. The pick
+            # ledger records the same field plus the exact bar (picks._bar_date).
+            "run_at": run_at,
             "ticker": scored.get("ticker"),
             "base_score": scored.get("score"),
             "projected_score": projected,
