@@ -19,3 +19,8 @@ build/
 dist/
 installer/Output/
 *.exe
+
+# Another project's planning docs that landed in this folder. This repo is PUBLIC,
+# so keep them out of a stray `git add -A`. They belong at C:\VS Code\Kalshi Edge Scanner\
+# alongside the other projects — move them when convenient.
+Kalshi Edge Scanner/
