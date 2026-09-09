@@ -27,6 +27,31 @@ backtest with a pre-registered kill criterion (`backtest.validate_regime_overlay
 **What the tool is actually for:** lower drawdown, downturn protection, and *idea surfacing*.
 It is a **risk-managed systematic idea generator, not an index beater.** Say so plainly.
 
+### The drawdown claim is now MEASURED, survivorship-free — 2026-09-09
+
+The 200-day-MA timing rule applied to **SPY itself** (one instrument, no survivorship possible),
+checked monthly over 27 years. See `docs/results-medium-horizon-and-timing.md`.
+
+| From | Buy & hold | With timing |
+|---|---|---|
+| 1999 | 8.7% CAGR, −55% DD | 7.7% CAGR, **−29% DD** |
+| 2003 | 11.4%, −55% | 9.5%, **−26%** |
+| 2010 | 14.1%, −34% | 10.0%, **−27%** |
+| 2015 | 13.8%, −34% | 9.8%, **−25%** |
+
+**Loses return in every sub-period. Halves drawdown in every sub-period.** Checking weekly or
+daily is worse (whipsaw). This is the first properly-powered, bias-free evidence for the claim
+this file has been making all along — and it is also the sixth independent confirmation that
+nothing here beats buy-and-hold on return.
+
+⚠️ **Never quote a selection-based backtest from this repo as evidence.** Every CSV in `data/`
+belongs to a 2026 survivor. Eligible names by year — all 27-year survivors: **70** (2000), 90
+(2003), 242 (2008), 404 (2018), 561 (2026). A top-20 trend portfolio "returns" +17,000% over
+that panel; the same idea restricted toward an investable universe collapses toward the index,
+and it *loses* the dot-com bust (−50% vs SPY −34%) with deeper drawdowns throughout.
+yfinance cannot fix this: of 10 known delisted S&P names, **8 return nothing and 2 return
+recycled tickers** (SBNY serves bars from 2024 for a bank that failed in 2023).
+
 ### The score carries no information — measured on ~7 years, 2026-09-09
 
 `research.panel_ic` on the restored deep cache (1,856 dates × 575 tickers, ~1,800 daily
