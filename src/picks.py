@@ -94,6 +94,14 @@ def log_picks(ranked, df_by_ticker, data_dir, date_str, *, source="briefing") ->
             "date": date_str,
             "ticker": ticker,
             "final_score": round(float(r["final_score"]), 1),
+            # rank_score is what actually ORDERED the shortlist (main.py sorts on it), while
+            # final_score is the clamped display value. 61% of logged picks pin at exactly
+            # final_score 100.0, so without this the historical ordering is unrecoverable from
+            # the ledger and no study can ask "did the ranking work". None on backfilled rows.
+            "rank_score": (round(float(r["rank_score"]), 2)
+                           if r.get("rank_score") is not None else None),
+            "pool_rank": r.get("pool_rank"),
+            "pool_size": r.get("pool_size"),
             "base_score": round(float(r.get("base_score", r["final_score"])), 1),
             "conviction": rotation._add_conviction(r),
             "entry_close": _entry_close(df_by_ticker.get(ticker)),

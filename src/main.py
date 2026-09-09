@@ -524,6 +524,14 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None,
         # that all pin at a displayed 100 tie and fall back to arbitrary order, and negatives
         # (put flow, falling estimates) that push past the clamp become invisible to the ranking.
         ranked.sort(key=lambda r: r.get("rank_score", r["final_score"]), reverse=True)
+
+    # Position in the day's screen, carried to the briefing in place of the saturated score.
+    # Measured 2026-09-09: 61% of 528 logged picks were pinned at exactly final_score 100.0, so
+    # the printed number could not separate the names on the page. Rank always can.
+    pool_size = len(cands)
+    for i, r in enumerate(ranked, start=1):
+        r["pool_rank"], r["pool_size"] = i, pool_size
+
     # Display cap: show only the top `shortlist_size` enriched candidates so the briefing stays
     # concise on a wide universe; the enriched-but-not-shown drop into "other scored".
     if len(ranked) > shortlist_size:
@@ -598,11 +606,13 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None,
         ranked, vetoed, others, excluded, date_str, context["regime"], context["note"],
         holdings=holdings, rotation_plan=rotation_plan, discovery=discovery, tone_line=tone,
         scorecard_summary=scorecard_summary, buy_threshold=buy_threshold,
+        adds_paused=adds_paused,
     )
     html = briefing.render_briefing_html(
         ranked, vetoed, others, excluded, date_str, context["regime"], context["note"],
         holdings=holdings, rotation_plan=rotation_plan, discovery=discovery, tone_line=tone,
         scorecard_summary=scorecard_summary, buy_threshold=buy_threshold,
+        adds_paused=adds_paused,
     )
     report_path = reports_dir / f"{date_str}.md"
     report_path.write_text(text, encoding="utf-8")

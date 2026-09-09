@@ -91,13 +91,15 @@ def test_scorecard_summary_marks_unmeasurable_alpha_as_none():
     assert s["underperforming"] is None
 
 
-def test_confidence_stays_low_when_performance_is_unknown():
-    from src import verdict
-    r = {"ticker": "AAA", "final_score": 90.0, "vetoed": False,
-         "adjustment_detail": [{"key": "catalyst", "points": 15},
-                               {"key": "analyst_bull", "points": 8}]}
-    v = verdict.classify(r, 65, underperforming=None)
-    assert v["confidence"] == "low"      # unknown is not permission to project conviction
+def test_briefing_never_states_a_track_record_it_cannot_support():
+    # Replaces the old "confidence stays low when performance is unknown" test. The ordinal tag
+    # it guarded is gone: 368 of 368 tags ever printed read "low confidence", because the tag
+    # collapsed to "low" whenever the system was underperforming, which it always was. Unknown
+    # performance must still never read as conviction — now it must print no rate at all.
+    out = briefing.render_briefing(**_tone_args(), scorecard_summary=_sc(n_matured=8, enough=False))
+    assert "no measured track record yet" in out
+    assert "confidence" not in out.lower()          # no bare ordinal survives anywhere
+    assert "% of past calls" not in out             # and no invented rate
 
 
 def test_reality_check_withholds_numbers_below_sample_floor():
@@ -220,7 +222,7 @@ def test_render_briefing_puts_holdings_above_candidates():
                            "detail": "down 9.2%"}])]
     text = briefing.render_briefing(ranked, [], [], [], "2026-06-08",
                                     "risk_on", "Upbeat.", holdings=holdings)
-    assert text.index("NVDA") < text.index("Top candidates")
+    assert text.index("NVDA") < text.index("Screen results")
 
 
 def test_signal_pill_colors_by_level():
@@ -336,7 +338,7 @@ def test_render_briefing_includes_rotation_and_discovery():
                                     holdings=[], rotation_plan=plan, discovery=discovery)
     assert "SMCI" in text                              # rotation add surfaced
     assert "BIG" in text                               # discovery surfaced
-    assert text.index("rotation") < text.index("Top candidates") if "rotation" in text.lower() else True
+    assert text.index("rotation") < text.index("Screen results") if "rotation" in text.lower() else True
 
 
 def test_render_briefing_html_includes_rotation_and_discovery():

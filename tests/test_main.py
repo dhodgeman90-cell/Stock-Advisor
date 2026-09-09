@@ -255,6 +255,16 @@ def test_adds_paused_suppresses_every_buy_but_keeps_exit_advice(tmp_path, monkey
     assert "adds" in res.rotation_plan and "exits" in res.rotation_plan
     assert res.ranked, "candidates are still scored and shown — only the BUY call is withheld"
 
+    # The leak this closes: for months the flag zeroed only the rotation adds, while the
+    # candidate section kept printing "Buy" for eight names a morning (332 such verdicts
+    # shipped). The rendered report must not say Buy anywhere while buys are paused.
+    assert "— Buy:" not in res.text
+    assert "Candidate:" in res.text or "Watch:" in res.text or "Avoid:" in res.text
+    assert "buys paused" in res.text.lower()
+    assert "confidence" not in res.text.lower()   # the constant ordinal tag is gone
+    # and the HTML email must not disagree with the markdown
+    assert ">Buy<" not in res.html
+
 
 # ---- control cohort: unbiased signal capture ----
 

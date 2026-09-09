@@ -32,6 +32,26 @@ def _ranked():
     ]
 
 
+def test_ledger_records_the_ordering_score_not_just_the_clamped_one(tmp_path):
+    # final_score is clamped to 100 and 61% of the live ledger pins there, so it cannot
+    # reconstruct the ranking. rank_score (what main.py actually sorts on) and the pool
+    # position must be persisted or no future study can grade the ordering.
+    ranked = [{"ticker": "AAA", "final_score": 100.0, "base_score": 81.0,
+               "rank_score": 118.4, "pool_rank": 1, "pool_size": 64}]
+    picks.log_picks(ranked, {"AAA": make_df([10.0] * 60)}, tmp_path, "2026-09-09")
+    rec = picks.load_picks(tmp_path)[0]
+    assert rec["rank_score"] == 118.4
+    assert (rec["pool_rank"], rec["pool_size"]) == (1, 64)
+    assert rec["final_score"] == 100.0        # the clamped value is still kept alongside
+
+
+def test_ledger_tolerates_picks_with_no_rank_score(tmp_path):
+    # report-backfilled rows have no rank_score; they must log as None, not raise.
+    picks.log_picks(_ranked()[:1], {"AAA": make_df([10.0] * 60)}, tmp_path, "2026-06-08")
+    rec = picks.load_picks(tmp_path)[0]
+    assert rec["rank_score"] is None and rec["pool_rank"] is None
+
+
 def test_log_picks_writes_entry_close_and_conviction(tmp_path):
     dfs = {"AAA": make_df([10.0, 11.0, 12.5]), "BBB": make_df([5.0, 5.0, 5.0])}
     n = picks.log_picks(_ranked(), dfs, tmp_path, "2026-06-08")
