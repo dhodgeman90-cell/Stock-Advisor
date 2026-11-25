@@ -3,7 +3,7 @@
 **Written 2026-09-09. No test has been run. This document fixes the acceptance bar BEFORE any
 number is computed**, following the precedent of `preregistration-8k-event-study.md`.
 
-**Status: NOT IMPLEMENTED. The signal is not in the score and must not be added on the evidence
+**Status: RUN 2026-11-25 — H1 REJECTED, negative and significant. See `results-short-interest.md`.** Previously: NOT IMPLEMENTED. The signal is not in the score and must not be added on the evidence
 below.**
 
 ---

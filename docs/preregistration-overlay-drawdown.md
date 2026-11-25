@@ -3,7 +3,7 @@
 **Written 2026-11-25. No test has been run. This fixes the acceptance bar BEFORE any number is
 computed**, as `results-medium-horizon-and-timing.md` standing conclusion 5 asks.
 
-**Status: NOT RUN.** `regime_overlay` stays commented out in `config/watchlist.yaml` until this
+**Status: RUN 2026-11-25 — PROPOSE_OVERLAY. See `results-overlay-drawdown.md`.** Before that run: `regime_overlay` stays commented out in `config/watchlist.yaml` until this
 says otherwise.
 
 ---
