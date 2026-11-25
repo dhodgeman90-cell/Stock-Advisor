@@ -98,11 +98,34 @@ def _extract_ticker(pos: dict):
     universal = symbol.get("symbol")
     if isinstance(universal, str):                       # activity row
         ticker = universal
+        meta = symbol                                    # type/currency sit beside the string
     else:                                                # position row
         universal = universal or {}
         ticker = universal.get("symbol") or universal.get("raw_symbol")
+        meta = universal
     ticker = ticker or symbol.get("raw_symbol")
-    return str(ticker).upper() if ticker else None
+    if not ticker:
+        return None
+    ticker = str(ticker).upper()
+    return _crypto_pair(ticker, meta) if _code(meta.get("type")) == "CRYPTO" else ticker
+
+
+def _code(obj):
+    """Upper-cased `code` from a SnapTrade type/currency object, or None."""
+    code = obj.get("code") if isinstance(obj, dict) else None
+    return str(code).upper() if code else None
+
+
+def _crypto_pair(ticker, meta):
+    """A crypto holding's yfinance symbol, e.g. BTC -> BTC-USD.
+
+    Without this a Bitcoin holding is priced as yfinance "BTC" — the Grayscale Bitcoin Mini
+    Trust ETF (~$30) — against a ~$90k cost basis: -99.9% and a false stop-loss exit every
+    morning (live 2026-10-06 -> 2026-11-24). Same-named stocks/ETFs never reach here.
+    """
+    if "-" in ticker:                                    # already a pair
+        return ticker
+    return f"{ticker}-{_code(meta.get('currency')) or 'USD'}"
 
 
 def _aggregate(raw_positions) -> list:
