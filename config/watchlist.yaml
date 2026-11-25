@@ -56,6 +56,14 @@ settings:
                                   #             control cohort, which is what made the
                                   #             2026-09-09 analysis possible at all.
                                   #   live    — agents score and render (the legacy default)
+  market_call: overlay            # overlay | monthly — the "Stay invested / Step aside" call
+                                  # that leads the briefing. overlay (daily, with hysteresis)
+                                  # passed its pre-registered drawdown test on SPY since 1999:
+                                  # worst drop ~-21% vs -34..-55% buy-and-hold, and beat the
+                                  # monthly 200-day rule in 4 of 4 periods
+                                  # (docs/results-overlay-drawdown.md). Neither beats
+                                  # buy-and-hold on return. A change in the call sends the
+                                  # quiet-mode email.
   # --- both OFF pending Phase 2/3 (2026-07-27 audit) ---
   # entry_model: relative_strength
   #   Re-ranks only INSIDE the 25 names the legacy breakout+volume pre-filter already chose,
@@ -65,6 +73,6 @@ settings:
   #   main.py and appears nowhere in backtest.py). Re-enable once ranking moves upstream of
   #   the pre-filter (Phase 2) and a full-universe backtest exists (Phase 3).
   # regime_overlay: true
-  #   Its own kill criterion returned "DO NOT SHIP" (3 of 4 checks FAIL) in
-  #   reports/backtest-regime-default-2026-07-27.md. Re-enable only after the gate is
-  #   re-specified to match its actual claim (drawdown reduction, not alpha) and passes.
+  #   NOT the market call above. This scales the STOCK-PICK rotation's exposure, and is
+  #   judged on a survivor-biased selection portfolio that cannot be evidence here. The
+  #   timing rule itself now drives market_call; keep this off while adds_paused is true.

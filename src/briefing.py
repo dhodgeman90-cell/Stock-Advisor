@@ -362,12 +362,32 @@ _TREND_HONESTY = (
 )
 
 
+_OVERLAY_HONESTY = (
+    "Rule: step aside when SPY is below its 200-day average AND more than 8% off its high for 3 "
+    "days running; back in after 5 days without that. Over SPY since 1999 its worst drop was "
+    "about -21% against -34% to -55% for buy-and-hold, at 1.5-5 points a year less return. It "
+    "does not beat buy-and-hold; it trades return for a smaller drop."
+)
+
+
 def _trend_lines(call):
-    """(headline, detail lines) for the monthly market call, shared by markdown and HTML."""
+    """(headline, detail lines) for the market call, shared by markdown and HTML."""
     if not call:
         return ("Market call unavailable — no SPY history this run.", [])
     word = "Stay invested" if call["stance"] == "invested" else "Step aside (cash)"
     side = "above" if call["pct_vs_sma"] >= 0 else "below"
+    if call.get("kind") == "overlay":
+        head = (f"{word} — SPY ${call['close']:,.2f} on {call['decided_on']}, "
+                f"{abs(call['pct_vs_sma']):.1f}% {side} its 200-day average, "
+                f"{abs(call['dd_from_high']):.1f}% off its high.")
+        detail = []
+        if call.get("changed"):
+            prev = "invested" if call.get("previous_stance") == "invested" else "stepped aside"
+            detail.append(f"Changed today: the call was {prev} until now.")
+        else:
+            detail.append(f"Unchanged since {call['since']}.")
+        detail.append(_OVERLAY_HONESTY)
+        return head, detail
     head = (f"{word} — SPY closed {call['decided_on']} at ${call['close']:,.2f}, "
             f"{abs(call['pct_vs_sma']):.1f}% {side} its 200-day average (${call['sma']:,.2f}).")
     detail = []
@@ -384,9 +404,14 @@ def _trend_lines(call):
     return head, detail
 
 
+def _trend_title(call):
+    daily = bool(call) and call.get("kind") == "overlay"
+    return f"Market call (checked {'daily' if daily else 'monthly'})"
+
+
 def render_trend_call(call) -> str:
     head, detail = _trend_lines(call)
-    return "\n".join(["## 📈 Market call (checked monthly)", f"**{head}**"]
+    return "\n".join([f"## 📈 {_trend_title(call)}", f"**{head}**"]
                      + [f"- {d}" for d in detail])
 
 
@@ -396,7 +421,7 @@ def _trend_call_html(call, e) -> str:
                     for d in detail)
     return ('<div style="border:1px solid #d1d5db;border-radius:8px;padding:12px 14px;'
             'margin-bottom:14px;"><div style="font-size:12px;color:#6b7280;">'
-            'Market call (checked monthly)</div>'
+            f'{e(_trend_title(call))}</div>'
             f'<div style="font-size:15px;font-weight:700;color:#0f172a;margin-top:2px;">'
             f'{e(head)}</div>{items}</div>')
 

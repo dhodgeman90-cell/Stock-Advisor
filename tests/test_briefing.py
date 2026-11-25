@@ -527,3 +527,29 @@ def test_market_call_missing_is_said_not_hidden():
 def test_market_call_html_matches_markdown():
     html = briefing.render_briefing_html(**_tone_args(), trend_call=_call("aside", previous="aside"))
     assert "Step aside" in html and "does not beat buy-and-hold" in html
+
+
+def _overlay_call(stance="invested", changed=False):
+    return {"kind": "overlay", "stance": stance, "decided_on": "2026-11-24", "close": 640.0,
+            "sma": 650.0, "pct_vs_sma": -1.5, "dd_from_high": -6.2, "changed": changed,
+            "previous_stance": "aside" if changed and stance == "invested" else stance,
+            "since": "2026-04-30"}
+
+
+def test_overlay_call_wording_is_daily_and_honest():
+    out = briefing.render_briefing(**_tone_args(), trend_call=_overlay_call())
+    low = out.lower()
+    assert "Stay invested" in out and "checked daily" in low
+    assert "does not beat buy-and-hold" in low
+    assert "8%" in out and "200-day" in out                    # the rule, in plain words
+    assert "since 2026-04-30" in out
+
+
+def test_overlay_call_flags_a_change_today():
+    out = briefing.render_briefing(**_tone_args(), trend_call=_overlay_call("aside", changed=True))
+    assert "Step aside" in out and "changed today" in out.lower()
+
+
+def test_overlay_call_html():
+    html = briefing.render_briefing_html(**_tone_args(), trend_call=_overlay_call("aside"))
+    assert "Step aside" in html and "checked daily" in html.lower()

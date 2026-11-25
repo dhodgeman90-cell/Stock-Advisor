@@ -103,7 +103,7 @@ Read `config/watchlist.yaml` before describing behaviour. As of 2026-08-13:
 | `quiet_unless_actionable` | **true** | Email only when a holding trips an exit rule. The run and the daily signal capture continue regardless — only the notification stops. |
 | `adds_paused` | **true** | BUY calls withheld — **not** "pending validation" any more; validation happened six times. The sell side (exits/trims on open positions) stays fully live; candidates are still scored and shown — labelled **`Candidate`**, never `Buy`. ⚠️ Until 2026-09-09 this flag zeroed only the rotation adds while the shortlist kept printing "Buy" for eight names a morning (332 such verdicts shipped). `verdict.classify(..., adds_paused=True)` now enforces it, guarded end-to-end in `tests/test_main.py`. |
 | `entry_model: relative_strength` | **commented OUT** | The 2026-07-27 P0 audit disabled it: RS is renormalized inside an already-weak 25-name pre-filtered pool, and it has zero backtest and zero forward test. |
-| `regime_overlay` | **commented OUT** | The old return-based, survivor-biased portfolio gate said DO NOT SHIP (`reports/backtest-regime-default-2026-07-27.md`). It was retired; the re-specified, pre-registered **drawdown** test on SPY itself (`docs/results-overlay-drawdown.md`, 2026-11-25) returned **PROPOSE_OVERLAY**: max DD ~−21% vs B&H −34%…−55%, beats the monthly rule on CAGR/\|DD\| in 4 of 4, still below B&H on CAGR everywhere. Off until a separate proposal is accepted. |
+| `regime_overlay` | **commented OUT** | The old return-based, survivor-biased portfolio gate said DO NOT SHIP (`reports/backtest-regime-default-2026-07-27.md`). It was retired; the re-specified, pre-registered **drawdown** test on SPY itself (`docs/results-overlay-drawdown.md`, 2026-11-25) returned **PROPOSE_OVERLAY**: max DD ~−21% vs B&H −34%…−55%, beats the monthly rule on CAGR/\|DD\| in 4 of 4, still below B&H on CAGR everywhere. Adopted 2026-11-25 as the briefing's **market call** (`market_call: overlay`), not as a portfolio exposure scaler — this flag stays off. |
 
 ⚠️ Both flags were briefly enabled in commit `163267f`, then **turned back off** by the later
 P0 audit (`6ffbe9c`, `8c3d9ee`). Any note claiming the RS-entry forward test is running is
@@ -120,7 +120,7 @@ python -m src.main
 # Run the local browser dashboard (FastAPI on 127.0.0.1, never network-exposed)
 python -m src.app
 
-# Run the tests — 695 tests, ~45s
+# Run the tests — 704 tests, ~45s
 ./.venv/Scripts/python.exe -m pytest -q
 
 # Regime-overlay validation gate
@@ -179,10 +179,14 @@ Keep it green. If it goes red, fix the cause; do not disable the check.
   across the overlap**, rescales the old tail onto the new basis, inverse-scales Volume, and
   refuses to splice at all if that ratio isn't near-constant (IQR > 0.5%). Don't "simplify" it
   back to a concat.
-- **The briefing leads with the monthly market call** (`market.monthly_trend_call`): SPY's last
-  month-end close vs its 200-day average → "Stay invested" / "Step aside". It never uses a bar
-  from the current month (weekly/daily checks were measured worse). A change in the call is the
-  only thing besides a holding's exit signal that sends the quiet-mode email.
+- **The briefing leads with the market call** — "Stay invested" / "Step aside" on SPY.
+  `market_call: overlay` (default since 2026-11-25) uses `market.overlay_call`: the regime
+  overlay with hysteresis, checked daily, which passed its pre-registered drawdown test
+  (`docs/results-overlay-drawdown.md`). `market_call: monthly` uses `market.monthly_trend_call`
+  (last month-end close vs 200-day average). The overlay is path-dependent, so SPY is fetched
+  `MARKET_CALL_DAYS` = 3000 calendar days deep (shorter windows were measured to disagree with
+  full history). A change in the call is the only thing besides a holding's exit signal that
+  sends the quiet-mode email.
 - **The briefing shows a screen position, not a score.** 61% of logged picks used to pin at
   exactly `final_score` 100.0. `rank N of M` always discriminates. The ledger now also stores
   `rank_score`, `pool_rank`, `pool_size`, `run_at` and `bar_date`.
@@ -200,7 +204,7 @@ Keep it green. If it goes red, fix the cause; do not disable the check.
 
 1. **Never claim this beats the market.** See the finding above. State the drawdown/idea-surface
    value instead.
-2. **Use TDD** — this project is test-driven (695 tests). Write the failing test first
+2. **Use TDD** — this project is test-driven (704 tests). Write the failing test first
    (`superpowers:test-driven-development`).
 3. **Verify live config before describing behaviour** — flags have been flipped both ways.
 4. **Always explain commands** before running them; the owner is a beginner.

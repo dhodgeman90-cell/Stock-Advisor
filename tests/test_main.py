@@ -661,6 +661,28 @@ def test_the_briefing_always_carries_the_monthly_market_call(tmp_path, monkeypat
     assert ("Stay invested" in res.html) or ("Step aside" in res.html)
 
 
+def test_the_market_call_is_the_overlay_by_default_and_monthly_on_request(tmp_path, monkeypatch):
+    spy = helpers.make_df([400 + i * 0.1 for i in range(600)])
+    fetch = lambda t, lookback: spy if t == "SPY" else _buyable_df()
+    res = _offline_run(tmp_path / "a", monkeypatch, fetch=fetch)
+    assert res.trend_call["kind"] == "overlay"
+    res = _offline_run(tmp_path / "b", monkeypatch, fetch=fetch,
+                       extra_settings="  market_call: monthly\n")
+    assert res.trend_call.get("kind", "monthly") == "monthly"
+
+
+def test_spy_is_fetched_deep_enough_for_the_overlay(tmp_path, monkeypatch):
+    seen = {}
+    spy = helpers.make_df([400 + i * 0.1 for i in range(600)])
+    def fetch(t, lookback):
+        if t == "SPY":
+            seen.setdefault("days", []).append(lookback)       # the scorecard fetches SPY too
+            return spy
+        return _buyable_df()
+    _offline_run(tmp_path, monkeypatch, fetch=fetch)
+    assert max(seen["days"]) >= main.MARKET_CALL_DAYS >= 3000
+
+
 def test_quiet_mode_still_writes_the_report_and_captures_signals(tmp_path, monkeypatch):
     res = _offline_run(tmp_path, monkeypatch,
                        extra_settings="  quiet_unless_actionable: true\n")
