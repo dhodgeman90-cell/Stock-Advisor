@@ -111,7 +111,7 @@ python -m src.main
 # Run the local browser dashboard (FastAPI on 127.0.0.1, never network-exposed)
 python -m src.app
 
-# Run the tests — 662 tests, ~45s
+# Run the tests — 683 tests, ~45s
 ./.venv/Scripts/python.exe -m pytest -q
 
 # Regime-overlay validation gate
@@ -191,7 +191,7 @@ Keep it green. If it goes red, fix the cause; do not disable the check.
 
 1. **Never claim this beats the market.** See the finding above. State the drawdown/idea-surface
    value instead.
-2. **Use TDD** — this project is test-driven (662 tests). Write the failing test first
+2. **Use TDD** — this project is test-driven (683 tests). Write the failing test first
    (`superpowers:test-driven-development`).
 3. **Verify live config before describing behaviour** — flags have been flipped both ways.
 4. **Always explain commands** before running them; the owner is a beginner.

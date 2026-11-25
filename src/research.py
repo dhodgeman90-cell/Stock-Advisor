@@ -367,6 +367,96 @@ def panel_ic(scores, closes, bench, horizons=(5, 10, 21, 63), *, min_names=30, b
     return out
 
 
+def panel_rank_ic(signal, closes, volumes, bench, horizons=(5, 10, 21), *, neutralize=True,
+                  min_names=10, min_dollar_volume=10_000_000, exclude=None, by_year=False):
+    """`rank_ic` for a wide date x ticker signal panel, vectorised per day.
+
+    Same estimator as `rank_ic` (fractional ranks; size and volatility projected out of both
+    sides when `neutralize`; Pearson of the residual ranks; zero when nothing is left; Newey-West
+    with lag = horizon) -- a test pins the two to agreement -- but fast enough for ~5 years x
+    ~500 names. Adds what a history study needs and the live capture does not:
+
+    - `min_dollar_volume`: the live point-in-time liquidity gate, on trailing mean $volume.
+    - `exclude=(start, end)`: drop that window's cross-sections (e.g. a pilot period).
+    - `by_year`: per-calendar-year (ic, t), skipping part-years under 40 days.
+    """
+    import numpy as np
+    import pandas as pd
+
+    tickers = [t for t in signal.columns if t in closes.columns]
+    C = closes[tickers].astype(float)
+    V = volumes.reindex(index=C.index, columns=tickers).astype(float)
+    S = signal.reindex(index=C.index, columns=tickers).astype(float)
+    B = bench.reindex(C.index).astype(float)
+    dollars = (C * V).rolling(_VOL_WINDOW, min_periods=1).mean()
+    size = np.log(dollars.where(dollars > 0))
+    vol = (C / C.shift(1) - 1.0).rolling(_VOL_WINDOW, min_periods=10).std(ddof=0)
+    lo, hi = (pd.Timestamp(exclude[0]), pd.Timestamp(exclude[1])) if exclude else (None, None)
+
+    def _frac_rank(a):
+        return pd.Series(a).rank(method="average").to_numpy() / len(a)
+
+    def _resid(y, X):
+        if np.linalg.matrix_rank(X) < X.shape[1]:
+            return None
+        beta, *_ = np.linalg.lstsq(X, y, rcond=None)
+        return y - X @ beta
+
+    out = {}
+    for h in horizons:
+        fwd = (C.shift(-h) / C - 1.0).sub(B.shift(-h) / B - 1.0, axis=0)
+        dates, ics, n_obs = [], [], 0
+        for d in C.index:
+            if lo is not None and lo <= d <= hi:
+                continue
+            x, y = S.loc[d].to_numpy(), fwd.loc[d].to_numpy()
+            ok = ~np.isnan(x) & ~np.isnan(y)
+            if min_dollar_volume:
+                ok &= (dollars.loc[d].to_numpy() >= min_dollar_volume)
+            if neutralize:
+                sz, vl = size.loc[d].to_numpy(), vol.loc[d].to_numpy()
+                ok &= ~np.isnan(sz) & ~np.isnan(vl)
+            if ok.sum() < min_names or len(set(x[ok])) < 3:
+                continue
+            n_obs += int(ok.sum())
+            rx, ry = _frac_rank(x[ok]), _frac_rank(y[ok])
+            if neutralize:
+                ctrls = [c for c in (_frac_rank(sz[ok]), _frac_rank(vl[ok])) if len(set(c)) > 1]
+                if ctrls:
+                    X = np.column_stack([np.ones(len(rx))] + ctrls)
+                    rx, ry = _resid(rx, X), _resid(ry, X)
+                    if rx is None or ry is None:
+                        continue
+            ex, ey = rx - rx.mean(), ry - ry.mean()
+            va, vb = float(ex @ ex), float(ey @ ey)
+            if va <= 1e-12 or vb <= 1e-12:
+                if not neutralize:
+                    continue
+                ic = 0.0
+            else:
+                ic = float(ex @ ey) / math.sqrt(va * vb)
+            dates.append(d)
+            ics.append(ic)
+        if not ics:
+            out[h] = {"ic": None, "t": None, "n_days": 0, "hit_rate": None, "n_obs": 0,
+                      "by_year": {}}
+            continue
+        mean, t = newey_west(ics, h)
+        years = {}
+        if by_year:
+            ser = pd.Series(ics, index=pd.DatetimeIndex(dates))
+            for yr, g in ser.groupby(ser.index.year):
+                if len(g) < 40:
+                    continue
+                m, tt = newey_west(list(g.values), h)
+                years[int(yr)] = {"ic": m, "t": tt, "n_days": len(g),
+                                  "hit_rate": float((g > 0).mean())}
+        out[h] = {"ic": mean, "t": t, "n_days": len(ics),
+                  "hit_rate": sum(1 for v in ics if v > 0) / len(ics), "n_obs": n_obs,
+                  "by_year": years}
+    return out
+
+
 def _load_price_panel(data_dir="data", min_bars=800):
     """(scores, closes, bench) from the cached CSVs, using the verified vectorised scorer.
 
