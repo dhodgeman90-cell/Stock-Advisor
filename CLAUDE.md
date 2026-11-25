@@ -111,7 +111,7 @@ python -m src.main
 # Run the local browser dashboard (FastAPI on 127.0.0.1, never network-exposed)
 python -m src.app
 
-# Run the tests — 646 tests, ~45s
+# Run the tests — 662 tests, ~45s
 ./.venv/Scripts/python.exe -m pytest -q
 
 # Regime-overlay validation gate
@@ -170,6 +170,10 @@ Keep it green. If it goes red, fix the cause; do not disable the check.
   across the overlap**, rescales the old tail onto the new basis, inverse-scales Volume, and
   refuses to splice at all if that ratio isn't near-constant (IQR > 0.5%). Don't "simplify" it
   back to a concat.
+- **The briefing leads with the monthly market call** (`market.monthly_trend_call`): SPY's last
+  month-end close vs its 200-day average → "Stay invested" / "Step aside". It never uses a bar
+  from the current month (weekly/daily checks were measured worse). A change in the call is the
+  only thing besides a holding's exit signal that sends the quiet-mode email.
 - **The briefing shows a screen position, not a score.** 61% of logged picks used to pin at
   exactly `final_score` 100.0. `rank N of M` always discriminates. The ledger now also stores
   `rank_score`, `pool_rank`, `pool_size`, `run_at` and `bar_date`.
@@ -187,7 +191,7 @@ Keep it green. If it goes red, fix the cause; do not disable the check.
 
 1. **Never claim this beats the market.** See the finding above. State the drawdown/idea-surface
    value instead.
-2. **Use TDD** — this project is test-driven (646 tests). Write the failing test first
+2. **Use TDD** — this project is test-driven (662 tests). Write the failing test first
    (`superpowers:test-driven-development`).
 3. **Verify live config before describing behaviour** — flags have been flipped both ways.
 4. **Always explain commands** before running them; the owner is a beginner.

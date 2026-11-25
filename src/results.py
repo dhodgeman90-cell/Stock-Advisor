@@ -23,6 +23,7 @@ class RunResult:
     discovery: dict = field(default_factory=dict)
     report_path: Optional[Path] = None
     skipped: bool = False
+    trend_call: Optional[dict] = None
 
 
 @dataclass

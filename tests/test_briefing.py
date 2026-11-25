@@ -478,3 +478,52 @@ def test_candidate_still_shows_a_real_agent_opinion():
     out = briefing.render_briefing([r], [], [], [], "2026-09-09", "neutral", "n", holdings=[])
     assert "Landed a big contract" in out
     assert "earnings in 3 days" in out
+
+
+# ---- the monthly market call leads the briefing ---------------------------------------------
+
+def _call(stance="invested", changed=False, previous="invested"):
+    return {"stance": stance, "decided_on": "2026-10-31", "close": 680.0, "sma": 650.0,
+            "pct_vs_sma": 4.6, "previous_stance": previous, "changed": changed,
+            "latest_date": "2026-11-21", "latest_close": 640.0, "latest_sma": 655.0}
+
+
+def test_market_call_leads_the_briefing_above_everything_else():
+    out = briefing.render_briefing(**_tone_args(), trend_call=_call())
+    assert "Stay invested" in out
+    assert out.index("Stay invested") < out.index("Market regime")
+    assert "2026-10-31" in out
+
+
+def test_market_call_step_aside_wording():
+    out = briefing.render_briefing(**_tone_args(), trend_call=_call("aside", previous="aside"))
+    assert "Step aside" in out
+    assert "Stay invested" not in out
+
+
+def test_market_call_flags_a_change_from_last_month():
+    out = briefing.render_briefing(**_tone_args(),
+                                   trend_call=_call("aside", changed=True, previous="invested"))
+    assert "changed" in out.lower()
+
+
+def test_market_call_is_honest_that_it_does_not_beat_holding():
+    out = briefing.render_briefing(**_tone_args(), trend_call=_call())
+    low = out.lower()
+    assert "does not beat buy-and-hold" in low
+    assert "drawdown" in low or "worst drop" in low
+
+
+def test_market_call_mentions_a_mid_month_cross_without_acting_on_it():
+    out = briefing.render_briefing(**_tone_args(), trend_call=_call())   # latest below sma
+    assert "below" in out.lower() and "month-end" in out.lower()
+
+
+def test_market_call_missing_is_said_not_hidden():
+    out = briefing.render_briefing(**_tone_args(), trend_call=None)
+    assert "Market call unavailable" in out
+
+
+def test_market_call_html_matches_markdown():
+    html = briefing.render_briefing_html(**_tone_args(), trend_call=_call("aside", previous="aside"))
+    assert "Step aside" in html and "does not beat buy-and-hold" in html

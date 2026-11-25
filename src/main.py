@@ -201,7 +201,7 @@ def _has_priority_signal(ticker, congress_agg, wsb_map, min_mentions) -> bool:
     return False
 
 
-def _worth_notifying(holdings, quiet: bool) -> bool:
+def _worth_notifying(holdings, quiet: bool, trend_call=None) -> bool:
     """Should today's briefing be emailed at all?
 
     A fresh pick list is deliberately NOT a reason. The screen has no measured edge, turnover
@@ -212,6 +212,10 @@ def _worth_notifying(holdings, quiet: bool) -> bool:
     answerable later, and stopping it would be the expensive mistake.
     """
     if not quiet:
+        return True
+    # The month the stay-invested / step-aside call flips is the other day with evidence
+    # behind acting (docs/results-medium-horizon-and-timing.md §1).
+    if trend_call and trend_call.get("changed"):
         return True
     return any(h.get("signals") for h in (holdings or []))
 
@@ -608,18 +612,22 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None,
                                        "ai_regime": (ai_context or {}).get("regime")})
         except Exception as e:
             print(f"[ai history log failed: {e}]")
-    # Opt-in features need SPY history (regime signal + relative strength). Fetch once, only when
-    # a feature is on, degrading to legacy behavior if it fails — the default run never fetches SPY
-    # here and stays byte-identical.
+    # SPY history feeds the regime overlay and relative strength (opt-in), degrading to legacy
+    # behavior if the fetch fails.
     spy_hist = None
     # SPY is also needed to answer "was holding these better than holding the index?", which is
     # the comparison the owner actually acted on and the briefing never showed. Fetch it whenever
     # there are positions to compare, not only when an opt-in feature is on.
-    if entry_model == "relative_strength" or regime_overlay or holdings:
-        try:
-            spy_hist = fetch("SPY", _regime_fetch_days(lookback))
-        except Exception as e:
-            print(f"[SPY fetch failed — benchmark comparison omitted: {e}]")
+    # And every run needs it for the monthly market call, which now leads the briefing.
+    try:
+        spy_hist = fetch("SPY", _regime_fetch_days(lookback))
+    except Exception as e:
+        print(f"[SPY fetch failed — market call and benchmark comparison omitted: {e}]")
+    trend_call = None
+    try:
+        trend_call = market.monthly_trend_call(spy_hist, date_str)
+    except Exception as e:
+        print(f"[market call failed: {e}]")
     if holdings and spy_hist is not None:
         _attach_benchmark(holdings, positions, spy_hist)
     if entry_model == "relative_strength" and spy_hist is not None:
@@ -716,13 +724,13 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None,
         ranked, vetoed, others, excluded, date_str, context["regime"], context["note"],
         holdings=holdings, rotation_plan=rotation_plan, discovery=discovery, tone_line=tone,
         scorecard_summary=scorecard_summary, buy_threshold=buy_threshold,
-        adds_paused=adds_paused,
+        adds_paused=adds_paused, trend_call=trend_call,
     )
     html = briefing.render_briefing_html(
         ranked, vetoed, others, excluded, date_str, context["regime"], context["note"],
         holdings=holdings, rotation_plan=rotation_plan, discovery=discovery, tone_line=tone,
         scorecard_summary=scorecard_summary, buy_threshold=buy_threshold,
-        adds_paused=adds_paused,
+        adds_paused=adds_paused, trend_call=trend_call,
     )
     report_path = reports_dir / f"{date_str}.md"
     report_path.write_text(text, encoding="utf-8")
@@ -733,9 +741,9 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None,
     # Optional email (only when all EMAIL_* secrets are present, and only when there is
     # something to act on if quiet_unless_actionable is set — see _worth_notifying).
     quiet = bool(settings.get("quiet_unless_actionable", False))
-    notify = _worth_notifying(holdings, quiet)
+    notify = _worth_notifying(holdings, quiet, trend_call)
     if quiet and not notify:
-        print("[quiet: no exit signal on any holding — report written, no email sent]")
+        print("[quiet: no exit signal and no change in the market call — report written, no email sent]")
     if notify and all(secrets.get(k) for k in ("EMAIL_USER", "EMAIL_PASSWORD", "EMAIL_TO")):
         try:
             briefing.send_email(
@@ -753,7 +761,7 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None,
 
     return RunResult(
         date=date_str, text=text, html=html,
-        regime=context["regime"], regime_note=context["note"],
+        regime=context["regime"], regime_note=context["note"], trend_call=trend_call,
         ranked=ranked, vetoed=vetoed, others=others, excluded=excluded,
         holdings=holdings, rotation_plan=rotation_plan, discovery=discovery,
         report_path=report_path, skipped=False,
