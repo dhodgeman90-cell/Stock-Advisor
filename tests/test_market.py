@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 
 from src import market
@@ -197,3 +198,40 @@ def test_trend_call_uses_no_bar_from_the_current_month():
     b = market.monthly_trend_call(df2, as_of="2026-02-10")
     assert (a["stance"], a["decided_on"], a["close"], a["sma"]) == \
            (b["stance"], b["decided_on"], b["close"], b["sma"])
+
+
+# ---- the overlay market call (docs/results-overlay-drawdown.md: PROPOSE_OVERLAY, adopted) ----
+
+def test_overlay_call_matches_the_tested_rule_on_the_last_bar():
+    rng = np.random.default_rng(1)
+    close = 100 * np.cumprod(1 + rng.normal(0.0003, 0.012, 700))
+    df = _spy(list(close), start="2023-01-02")
+    want = market.apply_hysteresis(market.regime_series(df)).iloc[-1] != "risk_off"
+    call = market.overlay_call(df)
+    assert (call["stance"] == "invested") == bool(want)
+    assert call["kind"] == "overlay"
+    assert call["decided_on"] == str(df.index[-1].date())
+
+
+def test_overlay_call_steps_aside_in_a_confirmed_downtrend():
+    vals = [100.0 + 0.1 * i for i in range(300)] + [130.0 - 1.0 * i for i in range(40)]
+    call = market.overlay_call(_spy(vals))
+    assert call["stance"] == "aside"
+    assert call["dd_from_high"] < -8.0
+
+
+def test_overlay_call_reports_the_day_it_changed():
+    vals = [100.0 + 0.1 * i for i in range(300)] + [130.0 - 1.0 * i for i in range(40)]
+    df = _spy(vals)
+    regime = market.apply_hysteresis(market.regime_series(df))
+    flip = next(i for i in range(1, len(regime)) if regime.iloc[i] != regime.iloc[i - 1])
+    on_flip = market.overlay_call(df.iloc[:flip + 1])
+    assert on_flip["changed"] is True and on_flip["previous_stance"] == "invested"
+    day_after = market.overlay_call(df.iloc[:flip + 2])
+    assert day_after["changed"] is False
+    assert day_after["since"] == str(df.index[flip].date())
+
+
+def test_overlay_call_none_without_data():
+    assert market.overlay_call(None) is None
+    assert market.overlay_call(_spy([100.0] * 50)) is None      # no 200-day average yet

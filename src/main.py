@@ -294,6 +294,10 @@ def _confirmed_regime(spy_hist):
         return "risk_on"
 
 
+MARKET_CALL_DAYS = 3000  # calendar days of SPY for the overlay call. Its hysteresis is path-
+                         # dependent: replayed on SPY since 1995, a trailing 800-day window gave
+                         # a different call than full history on 94 of 6,012 days (1.6%), 1,500
+                         # days on 9 of 1,752 sampled, 3,000 days on none since 2006.
 REGIME_MIN_DAYS = 400   # regime_series needs a 200-day MA; a 200-day universe lookback is only
                         # ~206 trading bars (MA valid on ~3), so size the SPY pull independently.
 
@@ -620,12 +624,16 @@ def run(profile: Profile | None = None, force: bool = False, *, fetch=None,
     # there are positions to compare, not only when an opt-in feature is on.
     # And every run needs it for the monthly market call, which now leads the briefing.
     try:
-        spy_hist = fetch("SPY", _regime_fetch_days(lookback))
+        spy_hist = fetch("SPY", max(_regime_fetch_days(lookback), MARKET_CALL_DAYS))
     except Exception as e:
         print(f"[SPY fetch failed — market call and benchmark comparison omitted: {e}]")
     trend_call = None
     try:
-        trend_call = market.monthly_trend_call(spy_hist, date_str)
+        # "overlay" (default since 2026-11-25, docs/results-overlay-drawdown.md) or "monthly".
+        if settings.get("market_call", "overlay") == "monthly":
+            trend_call = market.monthly_trend_call(spy_hist, date_str)
+        else:
+            trend_call = market.overlay_call(spy_hist)
     except Exception as e:
         print(f"[market call failed: {e}]")
     if holdings and spy_hist is not None:

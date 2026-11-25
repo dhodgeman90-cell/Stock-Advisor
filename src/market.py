@@ -242,3 +242,41 @@ def monthly_trend_call(spy_df, as_of, *, ma=200):
         "latest_close": float(close.iloc[-1]),
         "latest_sma": None if pd.isna(latest_sma) else float(latest_sma),
     }
+
+
+def overlay_call(spy_df):
+    """The daily stay-invested / step-aside call from the regime overlay.
+
+    Exactly the rule tested in docs/results-overlay-drawdown.md (PROPOSE_OVERLAY, adopted
+    2026-11-25): regime_series (50/200-day averages, 8% off the high) smoothed by
+    apply_hysteresis (out after 3 confirming days, back in after 5). Over SPY since 1999 its
+    worst drop was ~-21% vs -34%..-55% buy-and-hold, at 1.5-5 points a year less return.
+
+    The hysteresis is path-dependent, so callers should pass a long history (see
+    main.MARKET_CALL_DAYS). Returns None without data or before the 200-day average exists.
+    """
+    if spy_df is None or len(spy_df) == 0:
+        return None
+    close = spy_df["Close"].astype(float).dropna()
+    sma = close.rolling(200).mean()
+    if pd.isna(sma.iloc[-1]):
+        return None
+    regime = apply_hysteresis(regime_series(spy_df.loc[close.index]))
+    invested = regime != "risk_off"
+    now = bool(invested.iloc[-1])
+    prev = bool(invested.iloc[-2]) if len(invested) > 1 else now
+    flips = invested.index[invested.ne(invested.shift(1))]
+    c, s = float(close.iloc[-1]), float(sma.iloc[-1])
+    word = lambda b: "invested" if b else "aside"
+    return {
+        "kind": "overlay",
+        "stance": word(now),
+        "decided_on": close.index[-1].date().isoformat(),
+        "close": c,
+        "sma": s,
+        "pct_vs_sma": (c / s - 1.0) * 100.0,
+        "dd_from_high": (c / float(close.cummax().iloc[-1]) - 1.0) * 100.0,
+        "changed": now != prev,
+        "previous_stance": word(prev),
+        "since": flips[-1].date().isoformat(),
+    }
