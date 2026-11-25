@@ -101,3 +101,22 @@ def test_a_short_history_says_which_starts_it_cannot_support():
     # pre-registered: the earliest supported start replaces 1999
     assert set(res["per_start"]) == {2006, 2010, 2015}
     assert any("1999" in n and "2006" in n for n in res["notes"])
+
+
+def test_load_spy_splices_the_long_history_with_the_recent_daily_cache(tmp_path):
+    # longhistory reaches back decades but stops when it was last filled; the daily cache is
+    # current but short. The study must run "through the last completed month", so use both,
+    # rescaling the old file onto the recent one's adjustment basis across their overlap.
+    (tmp_path / "longhistory").mkdir()
+    old_idx = pd.bdate_range("1995-01-02", "2026-08-31")
+    pd.DataFrame({"Close": np.linspace(50, 300, len(old_idx))}, index=old_idx) \
+        .to_csv(tmp_path / "longhistory" / "SPY.csv")
+    new_idx = pd.bdate_range("2025-09-01", "2026-11-20")
+    old_on_new = pd.Series(np.linspace(50, 300, len(old_idx)), index=old_idx).reindex(new_idx)
+    new = old_on_new.fillna(310.0) * 1.02                      # a 2% re-adjustment
+    pd.DataFrame({"Close": new}, index=new_idx).to_csv(tmp_path / "SPY.csv")
+    spy = ts.load_spy(tmp_path)
+    assert spy.index[0] == old_idx[0] and spy.index[-1] == new_idx[-1]
+    assert spy.loc["2026-11-20"] == pytest.approx(310.0 * 1.02)
+    assert spy.loc["2000-01-03"] == pytest.approx(
+        float(pd.Series(np.linspace(50, 300, len(old_idx)), index=old_idx).loc["2000-01-03"]) * 1.02)

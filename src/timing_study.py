@@ -149,14 +149,27 @@ def render(res) -> str:
 
 
 def load_spy(data_dir="data"):
-    best = None
+    """SPY closes: the deep longhistory file spliced onto the current daily cache.
+
+    longhistory reaches back decades but stops when it was last filled; the daily cache is
+    current but short. The pre-registration says "through the last completed month", so both
+    are needed. data._merge_history does the splice on the recent file's adjustment basis (and
+    refuses to splice if the overlap is not a clean re-adjustment).
+    """
+    from src import data
+
+    frames = []
     for p in (Path(data_dir) / "longhistory" / "SPY.csv", Path(data_dir) / "SPY.csv"):
         if p.exists():
             df = pd.read_csv(p, index_col=0, parse_dates=True)
             df.columns = [c.capitalize() for c in df.columns]
-            if best is None or len(df) > len(best):
-                best = df
-    return None if best is None else best["Close"]
+            frames.append(df)
+    if not frames:
+        return None
+    merged = frames[0]
+    for df in frames[1:]:
+        merged = data._merge_history(merged, df)
+    return merged["Close"]
 
 
 if __name__ == "__main__":
