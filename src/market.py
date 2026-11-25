@@ -193,3 +193,52 @@ def apply_hysteresis(raw, *, confirm_down=3, confirm_up=5):
             state = "risk_on"
         out.append(state)
     return pd.Series(out, index=raw.index)
+
+
+def monthly_trend_call(spy_df, as_of, *, ma=200):
+    """The monthly stay-invested / step-aside call: SPY's last month-end close vs its MA.
+
+    This is the one rule in this repo with survivorship-free evidence behind it
+    (docs/results-medium-horizon-and-timing.md §1, 27 years of SPY): it roughly HALVES the
+    worst drawdown in every sub-period tested and gives up ~1-4 points of annual return in
+    every one. It does not beat buy-and-hold; it trades return for a smaller drop.
+
+    Decided only on the last bar BEFORE `as_of`'s month — never on a bar from the current
+    month — because checking weekly or daily was measured worse (whipsaw). Today's position vs
+    the average is returned too (`latest_*`), for information only.
+
+    Returns None when there is no SPY data or fewer than `ma` bars by the decision date.
+    """
+    if spy_df is None or len(spy_df) == 0:
+        return None
+    close = spy_df["Close"].astype(float).dropna()
+    sma = close.rolling(ma).mean()
+    month_start = pd.Timestamp(as_of).normalize().replace(day=1)
+
+    def _decide(before):
+        prior = close.index[close.index < before]
+        if len(prior) == 0:
+            return None
+        day = prior[-1]
+        if pd.isna(sma.loc[day]):
+            return None
+        c, s = float(close.loc[day]), float(sma.loc[day])
+        return {"stance": "invested" if c > s else "aside", "day": day, "close": c, "sma": s}
+
+    now = _decide(month_start)
+    if now is None:
+        return None
+    prev = _decide(now["day"].replace(day=1))
+    latest_sma = sma.iloc[-1]
+    return {
+        "stance": now["stance"],
+        "decided_on": now["day"].date().isoformat(),
+        "close": now["close"],
+        "sma": now["sma"],
+        "pct_vs_sma": (now["close"] / now["sma"] - 1.0) * 100.0,
+        "previous_stance": prev["stance"] if prev else None,
+        "changed": bool(prev) and prev["stance"] != now["stance"],
+        "latest_date": close.index[-1].date().isoformat(),
+        "latest_close": float(close.iloc[-1]),
+        "latest_sma": None if pd.isna(latest_sma) else float(latest_sma),
+    }

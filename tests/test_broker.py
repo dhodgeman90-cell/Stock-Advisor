@@ -208,6 +208,53 @@ def test_extract_ticker_handles_both_position_and_activity_shapes():
     assert broker._extract_ticker({}) is None
 
 
+# ---- crypto holdings ------------------------------------------------------
+# Live bug, 2026-10-06 -> 2026-11-24: a Bitcoin holding arrived from SnapTrade as "BTC" and
+# was priced with yfinance "BTC", which is the Grayscale Bitcoin Mini Trust ETF (~$30).
+# Against a ~$90k cost basis that read as -99.9% and fired a stop-loss exit every morning.
+# SnapTrade marks the instrument with type.code == "crypto"; yfinance quotes it as BTC-USD.
+
+def _crypto_position(ticker, units, avg, currency="USD"):
+    return {"symbol": {"symbol": {"symbol": ticker, "raw_symbol": ticker,
+                                  "type": {"code": "crypto", "description": "Cryptocurrency"},
+                                  "currency": {"code": currency}}},
+            "units": units, "average_purchase_price": avg, "price": avg}
+
+
+def test_crypto_position_maps_to_the_yfinance_pair_not_the_same_named_stock():
+    assert broker._extract_ticker(_crypto_position("btc", 0.01, 90000.0)) == "BTC-USD"
+
+
+def test_crypto_activity_maps_the_same_way_so_entry_dates_still_line_up():
+    row = {"trade_date": "2026-10-06T00:00:00Z", "type": "BUY", "units": 0.01,
+           "symbol": {"symbol": "BTC", "raw_symbol": "BTC",
+                      "type": {"code": "crypto"}, "currency": {"code": "USD"}}}
+    assert broker._extract_ticker(row) == "BTC-USD"
+    assert broker._derive_open_dates([row]) == {"BTC-USD": "2026-10-06"}
+
+
+def test_crypto_quoted_in_another_currency_uses_that_currency():
+    assert broker._extract_ticker(_crypto_position("ETH", 1, 3000.0, currency="CAD")) == "ETH-CAD"
+
+
+def test_crypto_ticker_already_a_pair_is_not_double_suffixed():
+    assert broker._extract_ticker(_crypto_position("BTC-USD", 0.01, 90000.0)) == "BTC-USD"
+
+
+def test_a_stock_or_etf_named_btc_is_left_alone():
+    etf = {"symbol": {"symbol": {"symbol": "BTC", "type": {"code": "et"}}}}
+    assert broker._extract_ticker(etf) == "BTC"
+
+
+def test_fetch_holdings_keeps_crypto_cost_basis_against_the_crypto_ticker(monkeypatch):
+    _set_link_env(monkeypatch)
+    fake = FakeSnapTrade(accounts=[{"id": "a"}],
+                         positions_by_account={"a": [_crypto_position("BTC", 0.02, 90000.0)]})
+    holdings = {h["ticker"]: h for h in broker.fetch_holdings(client_factory=lambda: fake)}
+    assert set(holdings) == {"BTC-USD"}
+    assert holdings["BTC-USD"]["entry_price"] == pytest.approx(90000.0)
+
+
 def test_derive_open_date_for_a_simple_single_buy():
     assert broker._derive_open_dates([_act("2026-07-22", "JPM", 0.065)]) == {"JPM": "2026-07-22"}
 

@@ -222,7 +222,7 @@ def _buyable_df():
     return df
 
 
-def _offline_run(tmp_path, monkeypatch, extra_settings="", universe=None):
+def _offline_run(tmp_path, monkeypatch, extra_settings="", universe=None, fetch=None):
     """Fully-offline main.run() over strongly-rising tickers (each scores well above 65)."""
     cfg = tmp_path / "config"
     _seed_min_config(cfg)
@@ -244,7 +244,7 @@ def _offline_run(tmp_path, monkeypatch, extra_settings="", universe=None):
     profile = Profile(config_dir=cfg, data_dir=tmp_path / "data",
                       reports_dir=tmp_path / "reports", secrets=EnvSecrets(values={}))
     return main.run(profile=profile, force=True,
-                    fetch=lambda ticker, lookback: _buyable_df())
+                    fetch=fetch or (lambda ticker, lookback: _buyable_df()))
 
 
 def test_adds_paused_suppresses_every_buy_but_keeps_exit_advice(tmp_path, monkeypatch):
@@ -642,6 +642,23 @@ def test_actionability_is_driven_by_exit_signals_not_by_the_screen():
 def test_quiet_mode_off_always_notifies():
     assert main._worth_notifying([{"ticker": "AAA", "signals": []}], quiet=False) is True
     assert main._worth_notifying([], quiet=False) is True
+
+
+def test_a_change_in_the_monthly_market_call_is_worth_an_email():
+    # The month the call flips is the one day the evidence-backed rule asks for action.
+    assert main._worth_notifying([], quiet=True, trend_call={"changed": True}) is True
+    assert main._worth_notifying([], quiet=True, trend_call={"changed": False}) is False
+    assert main._worth_notifying([], quiet=True, trend_call=None) is False
+
+
+def test_the_briefing_always_carries_the_monthly_market_call(tmp_path, monkeypatch):
+    # SPY is fetched for the call even with no holdings and no opt-in feature switched on.
+    spy = helpers.make_df([400 + i * 0.1 for i in range(400)])
+    res = _offline_run(tmp_path, monkeypatch,
+                       fetch=lambda t, lookback: spy if t == "SPY" else _buyable_df())
+    assert res.trend_call is not None, "SPY must be fetched for the market call every run"
+    assert "Stay invested" in res.text or "Step aside" in res.text
+    assert ("Stay invested" in res.html) or ("Step aside" in res.html)
 
 
 def test_quiet_mode_still_writes_the_report_and_captures_signals(tmp_path, monkeypatch):

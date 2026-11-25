@@ -77,6 +77,15 @@ it was screened from, and is thinner on 60% of days, every year 2020–2026 (0.8
 `breakout(30) + volume(30)` prefers thinner names. Small, persistent, uncompensated — the
 briefing now shows each name's `$vol/day` and realised vol rather than carrying it silently.
 
+### Short interest and the live capture — measured 2026-11-25
+
+- **Short interest (pre-registered, 5y FINRA, point-in-time):** 21d IC **−0.024 (t −3.05)**,
+  negative in every full year 2022–2025. H1 (positive) rejected; the pilot was a squeeze. The
+  `short_squeeze` cap stays where it is — changing it needs its own pre-registration.
+  `docs/results-short-interest.md`.
+- **Out-of-sample capture (2026-09-10 → 11-24):** the screen's candidates trailed the random
+  control cohort at 5/10/21d (−0.7/−1.6/−2.3%). `docs/results-forward-capture-2026-11.md`.
+
 Also honest-scope: **only ~25% of the signal engine is point-in-time backtestable** on free
 data (base technicals + SEC EDGAR). Congress / analyst / options / insider / short-interest /
 revisions / AI signals can only ever be proven **forward**, via the live scorecard ledger.
@@ -94,7 +103,7 @@ Read `config/watchlist.yaml` before describing behaviour. As of 2026-08-13:
 | `quiet_unless_actionable` | **true** | Email only when a holding trips an exit rule. The run and the daily signal capture continue regardless — only the notification stops. |
 | `adds_paused` | **true** | BUY calls withheld — **not** "pending validation" any more; validation happened six times. The sell side (exits/trims on open positions) stays fully live; candidates are still scored and shown — labelled **`Candidate`**, never `Buy`. ⚠️ Until 2026-09-09 this flag zeroed only the rotation adds while the shortlist kept printing "Buy" for eight names a morning (332 such verdicts shipped). `verdict.classify(..., adds_paused=True)` now enforces it, guarded end-to-end in `tests/test_main.py`. |
 | `entry_model: relative_strength` | **commented OUT** | The 2026-07-27 P0 audit disabled it: RS is renormalized inside an already-weak 25-name pre-filtered pool, and it has zero backtest and zero forward test. |
-| `regime_overlay` | **commented OUT** | Its own kill criterion returned **"DO NOT SHIP"** (3 of 4 checks FAIL) in `reports/backtest-regime-default-2026-07-27.md`. |
+| `regime_overlay` | **commented OUT** | The old return-based, survivor-biased portfolio gate said DO NOT SHIP (`reports/backtest-regime-default-2026-07-27.md`). It was retired; the re-specified, pre-registered **drawdown** test on SPY itself (`docs/results-overlay-drawdown.md`, 2026-11-25) returned **PROPOSE_OVERLAY**: max DD ~−21% vs B&H −34%…−55%, beats the monthly rule on CAGR/\|DD\| in 4 of 4, still below B&H on CAGR everywhere. Off until a separate proposal is accepted. |
 
 ⚠️ Both flags were briefly enabled in commit `163267f`, then **turned back off** by the later
 P0 audit (`6ffbe9c`, `8c3d9ee`). Any note claiming the RS-entry forward test is running is
@@ -111,7 +120,7 @@ python -m src.main
 # Run the local browser dashboard (FastAPI on 127.0.0.1, never network-exposed)
 python -m src.app
 
-# Run the tests — 612 tests, ~31s
+# Run the tests — 695 tests, ~45s
 ./.venv/Scripts/python.exe -m pytest -q
 
 # Regime-overlay validation gate
@@ -170,6 +179,10 @@ Keep it green. If it goes red, fix the cause; do not disable the check.
   across the overlap**, rescales the old tail onto the new basis, inverse-scales Volume, and
   refuses to splice at all if that ratio isn't near-constant (IQR > 0.5%). Don't "simplify" it
   back to a concat.
+- **The briefing leads with the monthly market call** (`market.monthly_trend_call`): SPY's last
+  month-end close vs its 200-day average → "Stay invested" / "Step aside". It never uses a bar
+  from the current month (weekly/daily checks were measured worse). A change in the call is the
+  only thing besides a holding's exit signal that sends the quiet-mode email.
 - **The briefing shows a screen position, not a score.** 61% of logged picks used to pin at
   exactly `final_score` 100.0. `rank N of M` always discriminates. The ledger now also stores
   `rank_score`, `pool_rank`, `pool_size`, `run_at` and `bar_date`.
@@ -187,7 +200,7 @@ Keep it green. If it goes red, fix the cause; do not disable the check.
 
 1. **Never claim this beats the market.** See the finding above. State the drawdown/idea-surface
    value instead.
-2. **Use TDD** — this project is test-driven (612 tests). Write the failing test first
+2. **Use TDD** — this project is test-driven (695 tests). Write the failing test first
    (`superpowers:test-driven-development`).
 3. **Verify live config before describing behaviour** — flags have been flipped both ways.
 4. **Always explain commands** before running them; the owner is a beginner.

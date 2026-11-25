@@ -355,9 +355,56 @@ def _thin_data_note(r) -> str:
     return f" · thin data ({live}/7)" if live is not None and live < 3 else ""
 
 
+_TREND_HONESTY = (
+    "Rule: hold the index while SPY's month-end close is above its 200-day average, otherwise "
+    "cash. Over 27 years of SPY it cut the worst drawdown roughly in half and gave up about 1-4 "
+    "points of return a year. It does not beat buy-and-hold; it trades return for a smaller drop."
+)
+
+
+def _trend_lines(call):
+    """(headline, detail lines) for the monthly market call, shared by markdown and HTML."""
+    if not call:
+        return ("Market call unavailable — no SPY history this run.", [])
+    word = "Stay invested" if call["stance"] == "invested" else "Step aside (cash)"
+    side = "above" if call["pct_vs_sma"] >= 0 else "below"
+    head = (f"{word} — SPY closed {call['decided_on']} at ${call['close']:,.2f}, "
+            f"{abs(call['pct_vs_sma']):.1f}% {side} its 200-day average (${call['sma']:,.2f}).")
+    detail = []
+    if call.get("changed"):
+        prev = "invested" if call.get("previous_stance") == "invested" else "stepped aside"
+        detail.append(f"Changed this month: last month's call was {prev}.")
+    lc, ls = call.get("latest_close"), call.get("latest_sma")
+    if lc is not None and ls:
+        now_side = "above" if lc >= ls else "below"
+        detail.append(f"SPY is {now_side} the average as of {call['latest_date']} "
+                      f"(${lc:,.2f} vs ${ls:,.2f}); only the month-end close counts, so "
+                      f"this is information, not a signal.")
+    detail.append(_TREND_HONESTY)
+    return head, detail
+
+
+def render_trend_call(call) -> str:
+    head, detail = _trend_lines(call)
+    return "\n".join(["## 📈 Market call (checked monthly)", f"**{head}**"]
+                     + [f"- {d}" for d in detail])
+
+
+def _trend_call_html(call, e) -> str:
+    head, detail = _trend_lines(call)
+    items = "".join(f'<div style="font-size:11.5px;color:#4b5563;margin-top:4px;">{e(d)}</div>'
+                    for d in detail)
+    return ('<div style="border:1px solid #d1d5db;border-radius:8px;padding:12px 14px;'
+            'margin-bottom:14px;"><div style="font-size:12px;color:#6b7280;">'
+            'Market call (checked monthly)</div>'
+            f'<div style="font-size:15px;font-weight:700;color:#0f172a;margin-top:2px;">'
+            f'{e(head)}</div>{items}</div>')
+
+
 def render_briefing(ranked, vetoed, others, excluded, date_str, regime, regime_note,
                     holdings=None, rotation_plan=None, discovery=None, tone_line=None,
-                    scorecard_summary=None, buy_threshold=65, adds_paused=False) -> str:
+                    scorecard_summary=None, buy_threshold=65, adds_paused=False,
+                    trend_call=None) -> str:
     """Render the enriched daily briefing (Phase 2 + Phase 3 holdings + signal upgrade).
 
     `ranked` is pre-sorted by final_score. The rotation plan and holdings lead the
@@ -368,6 +415,8 @@ def render_briefing(ranked, vetoed, others, excluded, date_str, regime, regime_n
     underperforming = _underperf_flag(scorecard_summary)
     L = [
         f"# Stock Advisor — {date_str}",
+        "",
+        render_trend_call(trend_call),
         "",
         f"**Market regime:** {regime} — {regime_note}",
     ]
@@ -571,7 +620,7 @@ def _discovery_html(congress_movers, wsb_movers, e) -> str:
 def render_briefing_html(ranked, vetoed, others, excluded, date_str, regime,
                          regime_note, holdings=None, rotation_plan=None, discovery=None,
                          tone_line=None, scorecard_summary=None, buy_threshold=65,
-                         adds_paused=False) -> str:
+                         adds_paused=False, trend_call=None) -> str:
     """Styled HTML version of the daily briefing (plain-text fallback stays render_briefing)."""
     e = html.escape
     green = "#0f3d2e"
@@ -588,6 +637,7 @@ def render_briefing_html(ranked, vetoed, others, excluded, date_str, regime,
         f'<div style="font-size:12.5px;color:#a7d7c5;margin-top:2px;">'
         f'{e(date_str)} &middot; {e(regime)} — {e(regime_note)}</div>{tone_html}</div>',
         '<div style="padding:18px 24px 22px;">',
+        _trend_call_html(trend_call, e),
         _reality_check_html(scorecard_summary, e),
         _rotation_html(rotation_plan, e, green),
         '<div style="font-size:14px;font-weight:700;color:#0f172a;margin:18px 0 10px;">'

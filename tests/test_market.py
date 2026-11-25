@@ -130,3 +130,70 @@ def test_apply_hysteresis_cuts_after_confirm_down_and_restores_after_confirm_up(
     assert out.iloc[5] == "risk_off"                  # 3rd consecutive risk_off: cut
     assert out.iloc[-2] == "risk_off"                 # only 4 risk_on since: still defensive
     assert out.iloc[-1] == "risk_on"                  # 5th consecutive risk_on: restored
+
+
+# ---- monthly 200-day trend call -------------------------------------------------------------
+# The one rule in this repo with survivorship-free evidence behind it (docs/results-medium-
+# horizon-and-timing.md §1): hold the index while SPY's MONTH-END close is above its 200-day
+# average, otherwise cash. Checked monthly — weekly and daily were measured worse (whipsaw).
+
+def _spy(closes, start="2025-01-01"):
+    idx = pd.bdate_range(start, periods=len(closes))
+    return pd.DataFrame({"Close": closes}, index=idx)
+
+
+def test_trend_call_is_invested_when_last_month_end_closed_above_the_200d_average():
+    df = _spy([100.0 + 0.1 * i for i in range(300)])       # steady uptrend
+    call = market.monthly_trend_call(df, as_of="2026-02-10")
+    assert call["stance"] == "invested"
+    assert call["decided_on"] == "2026-01-30"                # last bar of the last full month
+    assert call["close"] > call["sma"]
+
+
+def test_trend_call_steps_aside_when_last_month_end_closed_below():
+    df = _spy([200.0 - 0.2 * i for i in range(300)])       # steady downtrend
+    assert market.monthly_trend_call(df, as_of="2026-02-10")["stance"] == "aside"
+
+
+def test_a_mid_month_cross_does_not_change_the_call():
+    # Uptrend through January, then a crash in February: the call stays "invested" until the
+    # February month-end is in. Acting mid-month is exactly the whipsaw that was measured worse.
+    df = _spy([100.0 + 0.1 * i for i in range(300)])          # runs into late February 2026
+    df.loc[df.index >= "2026-02-01", "Close"] = 50.0
+    call = market.monthly_trend_call(df, as_of="2026-02-25")
+    assert call["stance"] == "invested"
+    assert call["latest_close"] < call["latest_sma"]          # still shown, as information
+
+
+def test_trend_call_reports_a_change_from_the_previous_month():
+    # Uptrend through December, January collapses below the average; February's run switches.
+    df = _spy([100.0 + 0.1 * i for i in range(300)])
+    df.loc[df.index >= "2026-01-01", "Close"] = 60.0
+    call = market.monthly_trend_call(df, as_of="2026-02-03")
+    assert call["decided_on"] == "2026-01-30"
+    assert call["stance"] == "aside"
+    assert call["previous_stance"] == "invested"
+    assert call["changed"] is True
+
+
+def test_steady_call_is_not_reported_as_a_change():
+    df = _spy([100.0 + 0.1 * i for i in range(300)])
+    call = market.monthly_trend_call(df, as_of="2026-02-10")
+    assert call["previous_stance"] == "invested"
+    assert call["changed"] is False
+
+
+def test_trend_call_is_none_without_200_bars_before_the_month_end():
+    assert market.monthly_trend_call(_spy([100.0] * 150), as_of="2026-02-10") is None
+    assert market.monthly_trend_call(None, as_of="2026-02-10") is None
+
+
+def test_trend_call_uses_no_bar_from_the_current_month():
+    base = [100.0 + 0.1 * i for i in range(300)]
+    df = _spy(base)
+    a = market.monthly_trend_call(df, as_of="2026-02-10")
+    df2 = df.copy()
+    df2.loc[df2.index >= "2026-02-01", "Close"] = 1.0          # wreck February only
+    b = market.monthly_trend_call(df2, as_of="2026-02-10")
+    assert (a["stance"], a["decided_on"], a["close"], a["sma"]) == \
+           (b["stance"], b["decided_on"], b["close"], b["sma"])
