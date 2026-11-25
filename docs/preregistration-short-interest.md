@@ -123,3 +123,41 @@ if the pilot is real.
 **Reproduce the pilot:** `python -m src.research` (the "short pct_float" rows, neutralised
 column). **Do not** read the 21d column's t-stats — they rest on 9 overlapping cross-sections
 and are withheld for that reason.
+
+---
+
+## Amendment 1 — 2026-11-25, written before any FINRA data was downloaded
+
+Two assumptions above turned out to be wrong when the data source was checked. Both are fixed
+here, **before a single short-interest history number has been computed**, so that nothing below
+can have been chosen with the answer in view.
+
+**What was already known when this was written.** The out-of-sample read of the live capture
+(`results-forward-capture-2026-11.md`, 2026-09-10 → 2026-11-24) had already shown the pilot's
+`short.pct_float` IC at −0.016 (10d, neutralised). That is disclosed here because it is the
+only short-interest number seen before this amendment. It did not shape any choice below except
+by making a pass less likely.
+
+1. **History depth.** FINRA's free data covers exchange-listed stocks only for **five rolling
+   years** (its API and grid). The archive back to 2014 is **OTC-only**. So the test window is
+   whatever FINRA returns for the universe, expected **~Dec 2021 → Nov 2026**, not ~6.5 years.
+   - Criterion 3 becomes: **same sign in ≥ 3 of the 4 full calendar years 2022–2025** (75%,
+     stricter in proportion than the original 4 of 6). 2026 year-to-date is reported, not counted.
+   - Power: with ~5 years the minimum detectable IC at +21d is roughly **0.04–0.05**. A null
+     still means "no large effect", now with a larger floor.
+
+2. **Float is not available point-in-time for free.** FINRA reports short *shares*, not % of
+   float. The primary measure becomes **short shares ÷ shares outstanding**, with shares
+   outstanding from SEC EDGAR (`dei:EntityCommonStockSharesOutstanding`), usable only from its
+   **filing** date (latest filed value on or before the date; missing if older than 400 days).
+   Float ≤ outstanding, and the two rank almost identically across names, so this is the closest
+   free proxy. **Secondary, reported but not decisive:** FINRA days-to-cover.
+
+3. **Publication lag, made concrete.** FINRA publishes on the 7th business day after settlement.
+   A reading is usable from the **8th business day after settlement** (the next session after
+   publication), and the code asserts `usable_from > settlement + 7 business days`.
+
+Unchanged: hypothesis H1 and its positive direction, the +21d primary horizon, size + volatility
+neutralisation, |t| > 2.75 (Newey-West, lag = horizon, daily cross-sections), |mean IC| ≥ 0.02,
+the $10M/day point-in-time liquidity gate, the pilot-window exclusion (reported with and without
+2026-07-28 → 2026-09-09), and every pre-committed action.
